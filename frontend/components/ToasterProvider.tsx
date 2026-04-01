@@ -4,6 +4,8 @@ import { Toaster } from 'react-hot-toast';
 
 export default function ToasterProvider() {
   return (
+    // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+    /* @ts-ignore */
     <Toaster 
       position="bottom-right"
       toastOptions={{

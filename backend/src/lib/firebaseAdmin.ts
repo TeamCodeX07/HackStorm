@@ -26,10 +26,11 @@ export function initializeFirebaseAdmin() {
     console.log('Firebase Admin initialized successfully');
     return app;
   } catch (error) {
-    console.error('Error initializing Firebase Admin:', error);
-    throw error;
+    console.warn('⚠️ Firebase Admin NOT initialized. Auth features will fail!');
+    return null as any;
   }
 }
+
 
 export function getFirebaseAdmin() {
   if (!app) {

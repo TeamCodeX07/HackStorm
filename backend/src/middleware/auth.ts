@@ -49,9 +49,6 @@ export async function authenticateToken(
 
       // Attach user info to request object
       req.user = {
-        uid: decodedToken.uid,
-        email: decodedToken.email,
-        email_verified: decodedToken.email_verified,
         ...decodedToken,
       };
 

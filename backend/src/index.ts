@@ -1,15 +1,14 @@
+import dotenv from 'dotenv';
+dotenv.config();
+
 import express, { Request, Response, NextFunction } from 'express';
 import cors from 'cors';
 import rateLimit from 'express-rate-limit';
-import dotenv from 'dotenv';
 import './lib/db'; // Initializes Mongoose connection
 import { initializeFirebaseAdmin } from './lib/firebaseAdmin';
 import { authenticateToken } from './middleware/auth';
-
 import scanRoutes from './routes/scan';
 import historyRoutes from './routes/history';
-
-dotenv.config();
 
 // Initialize Services
 async function startServer() {
@@ -20,7 +19,6 @@ async function startServer() {
 
     // 2. Database is being connected via lib/db.ts
     console.log('Firebase and DB initialization procedures complete');
-
 
     const app = express();
     const PORT = process.env.PORT || 5000;
@@ -33,7 +31,7 @@ async function startServer() {
     ].filter(Boolean) as string[];
 
     app.use(cors({
-      origin: (origin, callback) => {
+      origin: (origin: string | undefined, callback: (err: Error | null, allow?: boolean) => void) => {
         if (!origin || allowedOrigins.indexOf(origin) !== -1 || !isProd) {
           callback(null, true);
         } else {
@@ -50,7 +48,7 @@ async function startServer() {
       windowMs: 60 * 1000, // 1 minute
       max: 5,
       keyGenerator: (req: Request) => (req as any).user?.uid || req.ip,
-      handler: (req, res, next, options) => {
+      handler: (req: Request, res: Response, next: NextFunction, options: any) => {
         res.status(429).json({
           error: "Rate limit exceeded",
           code: "RATE_LIMIT",
@@ -71,7 +69,6 @@ async function startServer() {
       });
     });
 
-
     // Registered routes (Auth + Rate Limit)
     app.use('/api/scan', authenticateToken, globalRateLimit, scanRoutes);
     app.use('/api/scans', authenticateToken, globalRateLimit, historyRoutes);
@@ -83,7 +80,7 @@ async function startServer() {
         user: {
           uid: req.user?.uid,
           email: req.user?.email,
-          emailVerified: req.user?.email_verified,
+          email_verified: req.user?.email_verified,
         },
       });
     });
@@ -113,5 +110,3 @@ async function startServer() {
 }
 
 startServer();
-
-
