@@ -1,9 +1,8 @@
 'use client';
 
 import React, { useState, useRef } from 'react';
-import { ref, uploadBytesResumable, getDownloadURL } from 'firebase/storage';
-import { storage } from '@/lib/firebase';
 import { useAuth } from '@/context/AuthContext';
+import { uploadToCloudinary } from '@/lib/cloudinary';
 
 interface MediaUploaderProps {
   onSuccess: (url: string, type: 'image' | 'video' | 'audio', name: string) => void;
@@ -64,30 +63,15 @@ export default function MediaUploader({ onSuccess }: MediaUploaderProps) {
     setUploading(true);
     setProgress(0);
 
-    const timestamp = Date.now();
-    const filename = `${timestamp}_${file.name.replace(/\s+/g, '_')}`;
-    const storagePath = `scans/${user.uid}/${filename}`;
-    const storageRef = ref(storage, storagePath);
-
-    const uploadTask = uploadBytesResumable(storageRef, file);
-
-    uploadTask.on(
-      'state_changed',
-      (snapshot) => {
-        const pct = Math.round((snapshot.bytesTransferred / snapshot.totalBytes) * 100);
-        setProgress(pct);
-      },
-      (uploadError) => {
-        console.error('Upload failed:', uploadError);
-        setError('Upload failed. Please try again.');
-        setUploading(false);
-      },
-      async () => {
-        const downloadUrl = await getDownloadURL(uploadTask.snapshot.ref);
-        setUploading(false);
-        onSuccess(downloadUrl, validation.type!, file.name);
-      }
-    );
+    try {
+      const secureUrl = await uploadToCloudinary(file, (pct) => setProgress(pct));
+      setUploading(false);
+      onSuccess(secureUrl, validation.type, file.name);
+    } catch (uploadError: any) {
+      console.error('Upload failed:', uploadError);
+      setError(uploadError.message || 'Upload failed. Please try again.');
+      setUploading(false);
+    }
   };
 
   const onDrop = (e: React.DragEvent) => {

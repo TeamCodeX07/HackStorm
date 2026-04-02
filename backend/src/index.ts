@@ -9,6 +9,7 @@ import { initializeFirebaseAdmin } from './lib/firebaseAdmin';
 import { authenticateToken } from './middleware/auth';
 import scanRoutes from './routes/scan';
 import historyRoutes from './routes/history';
+import uploadRoutes from './routes/upload';
 
 // Initialize Services
 async function startServer() {
@@ -72,6 +73,7 @@ async function startServer() {
     // Registered routes (Auth + Rate Limit)
     app.use('/api/scan', authenticateToken, globalRateLimit, scanRoutes);
     app.use('/api/scans', authenticateToken, globalRateLimit, historyRoutes);
+    app.use('/api/upload', authenticateToken, globalRateLimit, uploadRoutes);
 
     // Protected routes - require authentication
     app.get('/api/user/profile', authenticateToken, (req: Request, res: Response) => {
