@@ -44,3 +44,8 @@ export const adminAuth = () => {
   return firebaseApp.auth();
 };
 
+export const adminStorage = () => {
+  const firebaseApp = getFirebaseAdmin();
+  return firebaseApp.storage();
+};
+

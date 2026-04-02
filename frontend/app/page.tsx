@@ -1,11 +1,53 @@
 'use client';
 /* eslint-disable react/no-unescaped-entities */
 
-
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
+import { useCountUp } from '../hooks/useCountUp';
+
+interface Stats {
+  totalScans: number;
+  avgLatency: number;
+  coreEngines: number;
+  isFree: boolean;
+}
+
+const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:5000';
 
 export default function LandingPage() {
+  const [stats, setStats] = useState<Stats | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  const animatedTotalScans = useCountUp(stats?.totalScans || 0, 1500);
+  const animatedCoreEngines = useCountUp(stats?.coreEngines || 0, 1500);
+
+  const fetchStats = async () => {
+    try {
+      const res = await fetch(`${BACKEND_URL}/api/stats`);
+      if (res.ok) {
+        const data = await res.json();
+        setStats(data);
+      }
+    } catch (error) {
+      console.error('Failed to fetch stats:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchStats();
+    const interval = setInterval(fetchStats, 30000);
+    return () => clearInterval(interval);
+  }, []);
+
+  const formatTotalScans = (n: number) => {
+    if (n >= 1000) {
+      return (Math.floor(n / 100) / 10).toFixed(1) + 'k+';
+    }
+    return n.toString();
+  };
+
   const scrollToFeatures = () => {
     document.getElementById('features')?.scrollIntoView({ behavior: 'smooth' });
   };
@@ -69,19 +111,35 @@ export default function LandingPage() {
         {/* Stats Bar */}
         <div className="mt-24 grid w-full max-w-6xl grid-cols-2 gap-8 border-y border-white/5 bg-white/[0.02] p-8 backdrop-blur-sm md:grid-cols-4 md:rounded-3xl md:border-x">
           <div className="flex flex-col items-center gap-1">
-            <span className="text-3xl font-black text-white">4</span>
-            <span className="text-[10px] font-bold uppercase tracking-[0.2em] text-gray-500">Content Types</span>
+            {loading ? (
+              <div className="h-9 w-16 animate-pulse rounded bg-white/10"></div>
+            ) : (
+              <span className="text-3xl font-black text-white">{formatTotalScans(animatedTotalScans)}</span>
+            )}
+            <span className="text-[10px] font-bold uppercase tracking-[0.2em] text-gray-500">Total Scans</span>
           </div>
           <div className="flex flex-col items-center gap-1 border-white/5 md:border-l">
-            <span className="text-3xl font-black text-white">&lt;3s</span>
+            {loading ? (
+              <div className="h-9 w-16 animate-pulse rounded bg-white/10"></div>
+            ) : (
+              <span className="text-3xl font-black text-white">&lt;{stats?.avgLatency || 0}s</span>
+            )}
             <span className="text-[10px] font-bold uppercase tracking-[0.2em] text-gray-500">Avg Latency</span>
           </div>
           <div className="flex flex-col items-center gap-1 border-white/5 md:border-l">
-            <span className="text-3xl font-black text-white">5+</span>
+            {loading ? (
+              <div className="h-9 w-16 animate-pulse rounded bg-white/10"></div>
+            ) : (
+              <span className="text-3xl font-black text-white">{animatedCoreEngines}+</span>
+            )}
             <span className="text-[10px] font-bold uppercase tracking-[0.2em] text-gray-500">AI Integrations</span>
           </div>
           <div className="flex flex-col items-center gap-1 border-white/5 md:border-l">
-            <span className="text-3xl font-black text-white">100%</span>
+            {loading ? (
+              <div className="h-9 w-16 animate-pulse rounded bg-white/10"></div>
+            ) : (
+              <span className="text-3xl font-black text-white">{stats?.isFree ? '100%' : 'Premium'}</span>
+            )}
             <span className="text-[10px] font-bold uppercase tracking-[0.2em] text-gray-500">Free Tier</span>
           </div>
         </div>

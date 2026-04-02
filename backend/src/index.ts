@@ -4,23 +4,21 @@ dotenv.config();
 import express, { Request, Response, NextFunction } from 'express';
 import cors from 'cors';
 import rateLimit from 'express-rate-limit';
-import './lib/db'; // Initializes Mongoose connection
+import mongoose from 'mongoose';
 import { initializeFirebaseAdmin } from './lib/firebaseAdmin';
 import { authenticateToken } from './middleware/auth';
 import scanRoutes from './routes/scan';
 import historyRoutes from './routes/history';
 import uploadRoutes from './routes/upload';
+import statsRoutes from './routes/stats';
 
-// Initialize Services
 async function startServer() {
   try {
-    // 1. Initialize Firebase Admin
+    // 1. Initialize Firebase Admin first (no DB needed)
     initializeFirebaseAdmin();
-    console.log('Firebase Admin initialized');
+    console.log('✅ Firebase Admin initialized');
 
-    // 2. Database is being connected via lib/db.ts
-    console.log('Firebase and DB initialization procedures complete');
-
+    // 2. Setup Express app
     const app = express();
     const PORT = process.env.PORT || 5000;
     const isProd = process.env.NODE_ENV === 'production';
@@ -44,11 +42,16 @@ async function startServer() {
 
     app.use(express.json());
 
-    // Global Rate Limit (applied mostly to authenticated routes)
+    // Global Rate Limit
     const globalRateLimit = rateLimit({
-      windowMs: 60 * 1000, // 1 minute
+      windowMs: 60 * 1000,
       max: 5,
-      keyGenerator: (req: Request) => (req as any).user?.uid || req.ip,
+      // Use UID when authenticated, fallback to socket address (avoids ERR_ERL_KEY_GEN_IPV6)
+      keyGenerator: (req: Request) =>
+        (req as any).user?.uid ||
+        req.socket?.remoteAddress ||
+        'unknown',
+      validate: { xForwardedForHeader: false }, // suppress IPv6 validation crash
       handler: (req: Request, res: Response, next: NextFunction, options: any) => {
         res.status(429).json({
           error: "Rate limit exceeded",
@@ -66,16 +69,20 @@ async function startServer() {
         status: 'ok', 
         message: 'TruthLens API is running',
         uptime: process.uptime(),
+        dbState: mongoose.connection.readyState,
         timestamp: new Date()
       });
     });
 
-    // Registered routes (Auth + Rate Limit)
+    // Registered routes
+    app.use('/api/stats', statsRoutes);
+
+    // Triggered nodemon restart to load fresh database credentials // Public endpoint — no auth
     app.use('/api/scan', authenticateToken, globalRateLimit, scanRoutes);
     app.use('/api/scans', authenticateToken, globalRateLimit, historyRoutes);
     app.use('/api/upload', authenticateToken, globalRateLimit, uploadRoutes);
 
-    // Protected routes - require authentication
+    // Protected routes
     app.get('/api/user/profile', authenticateToken, (req: Request, res: Response) => {
       res.json({
         success: true,
@@ -90,10 +97,8 @@ async function startServer() {
     // Global Error Handler
     app.use((err: any, req: Request, res: Response, next: NextFunction) => {
       console.error('Unhandled Error:', err);
-      
       const status = err.status || 500;
       const message = isProd ? 'An unexpected error occurred' : err.message;
-      
       res.status(status).json({
         error: message,
         code: err.code || "INTERNAL_ERROR",
@@ -101,12 +106,35 @@ async function startServer() {
       });
     });
 
+    // 3. Connect to MongoDB in background — server starts immediately (Fix: resilient startup)
+    const MONGODB_URI = process.env.MONGODB_URI;
+    if (!MONGODB_URI) {
+      console.warn('⚠️  MONGODB_URI not set — DB features will be unavailable');
+    } else {
+      console.log('🔌 Connecting to MongoDB Atlas...');
+      mongoose.connect(MONGODB_URI, {
+        serverSelectionTimeoutMS: 15000,
+        socketTimeoutMS: 45000,
+        connectTimeoutMS: 15000,
+        bufferCommands: false,  // disables buffering — queries fail fast if DB not ready
+      })
+        .then(() => console.log('✅ MongoDB connected'))
+        .catch((err) => {
+          // Log but don't crash — stats route will return fallback values
+          console.error('❌ MongoDB connection failed:', err.message);
+          console.error('⚠️  Hint: Make sure your IP is whitelisted in MongoDB Atlas Network Access.');
+          console.error('   https://cloud.mongodb.com/v2 → Network Access → Add IP Address');
+        });
+    }
+
+    // Start accepting requests immediately — DB connects async in background
     app.listen(PORT, () => {
-      console.log(`Server is running on port ${PORT}`);
+      console.log(`🚀 Server running on port ${PORT}`);
       console.log(`CORS enabled for: ${allowedOrigins.join(', ')}`);
     });
+
   } catch (error) {
-    console.error('Failed to start server:', error);
+    console.error('❌ Fatal startup error:', error);
     process.exit(1);
   }
 }

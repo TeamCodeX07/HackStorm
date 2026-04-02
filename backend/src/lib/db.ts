@@ -3,12 +3,12 @@ import mongoose, { Schema, model, Document } from 'mongoose';
 const MONGODB_URI = process.env.MONGODB_URI;
 
 if (!MONGODB_URI) {
-  console.warn('⚠️ MONGODB_URI is not defined, database calls will fail!');
-} else {
-  mongoose.connect(MONGODB_URI)
-    .then(() => console.log('✅ Connected to MongoDB Atlas with Mongoose'))
-    .catch((err) => console.error('❌ MongoDB Atlas connection error:', err));
+  console.warn('⚠️ MONGODB_URI is not defined — DB calls will fail!');
 }
+
+// NOTE: Connection is established in src/index.ts before the server starts.
+// Do NOT call mongoose.connect() here — index.ts owns the connection lifecycle.
+
 
 export interface IScan extends Document {
   userId: string;
@@ -25,6 +25,7 @@ export interface IScan extends Document {
   detectedRegions?: any[];
   detectedTimestamps?: any[];
   fileName?: string;
+  latencyMs?: number;
 }
 
 const ScanSchema = new Schema<IScan>({
@@ -72,6 +73,7 @@ const ScanSchema = new Schema<IScan>({
   detectedRegions: { type: Schema.Types.Mixed },
   detectedTimestamps: { type: Schema.Types.Mixed },
   fileName: { type: String },
+  latencyMs: { type: Number },
 }, { 
   timestamps: false,
   versionKey: false

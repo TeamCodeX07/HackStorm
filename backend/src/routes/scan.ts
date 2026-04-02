@@ -12,9 +12,13 @@ const router = Router();
 
 // Rate limit: 5 requests per minute per user UID
 const scanRateLimit = rateLimit({
-  windowMs: 1 * 60 * 1000, // 1 minute
+  windowMs: 1 * 60 * 1000,
   max: 5,
-  keyGenerator: (req: Request) => (req as any).user?.uid || req.ip,
+  keyGenerator: (req: Request) =>
+    (req as any).user?.uid ||
+    req.socket?.remoteAddress ||
+    'unknown',
+  validate: { xForwardedForHeader: false }, // suppress ERR_ERL_KEY_GEN_IPV6 crash
   message: { error: 'Too many scan requests, please try again later' },
   standardHeaders: true,
   legacyHeaders: false,
@@ -29,6 +33,7 @@ router.post('/text', authenticateToken, scanRateLimit, async (req: Request, res:
   try {
     const { url, text } = req.body;
     const userId = (req as any).user?.uid;
+    const startTime = Date.now();
 
     if (!userId) {
       return res.status(401).json({ error: 'User not authenticated' });
@@ -89,7 +94,8 @@ router.post('/text', authenticateToken, scanRateLimit, async (req: Request, res:
       reasoning: analysisResult.reasoning,
       isMock: false,
       timestamp: new Date(),
-      claims: claimsWithSources
+      claims: claimsWithSources,
+      latencyMs: Date.now() - startTime
     };
 
     const savedScan = await Scan.create(scanData);
@@ -110,6 +116,7 @@ router.post('/media', authenticateToken, scanRateLimit, async (req: Request, res
   try {
     const { fileUrl, mediaType, fileName } = req.body;
     const userId = (req as any).user?.uid;
+    const startTime = Date.now();
 
     if (!userId) {
       return res.status(401).json({ error: 'User not authenticated' });
@@ -159,7 +166,8 @@ router.post('/media', authenticateToken, scanRateLimit, async (req: Request, res
       timestamp: new Date(),
       detectedRegions: regions,
       detectedTimestamps: timestamps,
-      fileName
+      fileName,
+      latencyMs: Date.now() - startTime
     };
 
     console.log('Saving media scan result to MongoDB...');
