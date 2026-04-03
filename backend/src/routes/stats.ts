@@ -1,6 +1,6 @@
 import { Router, Request, Response } from 'express';
 import mongoose from 'mongoose';
-import { Scan } from '../lib/db';
+import { Scan } from '../models/Scan';
 
 const router = Router();
 

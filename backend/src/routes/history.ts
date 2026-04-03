@@ -1,5 +1,5 @@
 import { Router, Request, Response } from 'express';
-import { Scan } from '../lib/db';
+import { Scan } from '../models/Scan';
 import { v2 as cloudinary } from 'cloudinary';
 
 // Cloudinary Configuration

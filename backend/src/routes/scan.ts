@@ -2,7 +2,7 @@ import { Router, Request, Response } from 'express';
 import axios from 'axios';
 import * as cheerio from 'cheerio';
 import rateLimit from 'express-rate-limit';
-import { Scan } from '../lib/db';
+import { Scan } from '../models/Scan';
 import { verifyMediaAuthenticity } from '../services/realityDefender';
 import { enrichSources } from '../utils/credibility';
 
