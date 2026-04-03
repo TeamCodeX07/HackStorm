@@ -3,14 +3,14 @@
 import React, { useEffect, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
-import ProtectedRoute from '@/components/ProtectedRoute';
-import { useAuth } from '@/context/AuthContext';
+
 import TextResultCard from '@/components/TextResultCard';
 import MediaResultCard from '@/components/MediaResultCard';
+import { apiFetch } from '@/lib/apiFetch';
 
 export default function ScanDetailPage() {
   const { id } = useParams();
-  const { user } = useAuth();
+
   const router = useRouter();
   const [scan, setScan] = useState<any>(null);
   const [loading, setLoading] = useState(true);
@@ -20,15 +20,10 @@ export default function ScanDetailPage() {
 
   useEffect(() => {
     const fetchScanDetails = async () => {
-      if (!user || !id) return;
+      if (!id) return;
       try {
-        const idToken = await user.getIdToken();
         const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:5000';
-        const response = await fetch(`${backendUrl}/api/scans/${id}`, {
-          headers: {
-            'Authorization': `Bearer ${idToken}`,
-          },
-        });
+        const response = await apiFetch(`${backendUrl}/api/scans/${id}`);
         const data = await response.json();
         if (response.ok) {
           setScan(data);
@@ -43,21 +38,17 @@ export default function ScanDetailPage() {
     };
 
     fetchScanDetails();
-  }, [user, id]);
+  }, [id]);
 
   const handleDelete = async () => {
-    if (!user || !id || deleting) return;
+    if (!id || deleting) return;
     if (!confirm('Are you sure you want to delete this scan permanently?')) return;
 
     setDeleting(true);
     try {
-      const idToken = await user.getIdToken();
       const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:5000';
-      const response = await fetch(`${backendUrl}/api/scans/${id}`, {
+      const response = await apiFetch(`${backendUrl}/api/scans/${id}`, {
         method: 'DELETE',
-        headers: {
-          'Authorization': `Bearer ${idToken}`,
-        },
       });
 
       if (response.ok) {
@@ -80,33 +71,28 @@ export default function ScanDetailPage() {
 
   if (loading) {
     return (
-      <ProtectedRoute>
-        <div className="flex min-h-screen items-center justify-center bg-gray-950">
-          <div className="h-12 w-12 animate-spin rounded-full border-4 border-white/10 border-t-blue-500"></div>
-        </div>
-      </ProtectedRoute>
+      <div className="flex min-h-screen items-center justify-center bg-gray-950">
+        <div className="h-12 w-12 animate-spin rounded-full border-4 border-white/10 border-t-blue-500"></div>
+      </div>
     );
   }
 
   if (error || !scan) {
     return (
-      <ProtectedRoute>
-        <div className="flex min-h-screen items-center justify-center bg-gray-950 p-8 text-center">
-          <div>
-            <h1 className="text-2xl font-bold text-white">Oops!</h1>
-            <p className="mt-2 text-gray-400">{error || 'Scan not found'}</p>
-            <Link href="/history" className="mt-6 inline-block text-blue-500 hover:underline">
-              Back to History
-            </Link>
-          </div>
+      <div className="flex min-h-screen items-center justify-center bg-gray-950 p-8 text-center">
+        <div>
+          <h1 className="text-2xl font-bold text-white">Oops!</h1>
+          <p className="mt-2 text-gray-400">{error || 'Scan not found'}</p>
+          <Link href="/history" className="mt-6 inline-block text-blue-500 hover:underline">
+            Back to History
+          </Link>
         </div>
-      </ProtectedRoute>
+      </div>
     );
   }
 
   return (
-    <ProtectedRoute>
-      <div className="min-h-screen bg-gradient-to-br from-gray-950 via-gray-900 to-black p-4 py-8 md:p-8">
+    <div className="min-h-screen bg-gradient-to-br from-gray-950 via-gray-900 to-black p-4 py-8 md:p-8">
         <div className="mx-auto max-w-4xl">
           {/* Breadcrumb */}
           <nav className="mb-8 flex items-center gap-2 text-sm font-medium text-gray-500">
@@ -172,6 +158,5 @@ export default function ScanDetailPage() {
           </div>
         </div>
       </div>
-    </ProtectedRoute>
   );
 }

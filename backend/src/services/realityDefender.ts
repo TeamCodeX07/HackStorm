@@ -28,6 +28,7 @@ export async function verifyMediaAuthenticity(
           'x-api-key': apiKey,
           'Content-Type': 'application/json',
         },
+        timeout: 20000,
       }
     );
 
@@ -42,14 +43,17 @@ export async function verifyMediaAuthenticity(
       timestamps: response.data.timestamps,
     };
   } catch (error: any) {
-    console.error('Reality Defender API Error:', error.response?.data || error.message);
-    
-    // Fallback to mock on rate limit or service error
-    if (error.response?.status === 429 || error.response?.status >= 500) {
+    const status = error.response?.status;
+    const detail = error.response?.data || error.message;
+    console.error('Reality Defender API Error:', detail);
+
+    // Keep media scans available even when provider is unreachable/misconfigured.
+    // This prevents hard 500 failures in the UI and returns explicit mock-tagged results.
+    if (!status || status === 429 || status >= 400) {
       return useMockResponse();
     }
-    
-    throw new Error('Failed to verify media authenticity');
+
+    return useMockResponse();
   }
 }
 

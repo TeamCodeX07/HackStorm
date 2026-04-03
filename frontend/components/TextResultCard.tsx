@@ -24,6 +24,16 @@ interface TextResultCardProps {
   };
 }
 
+const formatDate = (ts: string | Date | undefined | null) => {
+  if (!ts) return 'Just now';
+  const d = new Date(ts);
+  if (isNaN(d.getTime())) return 'Just now';
+  return d.toLocaleString('en-US', {
+    month: 'short', day: 'numeric', year: 'numeric',
+    hour: '2-digit', minute: '2-digit'
+  });
+};
+
 export default function TextResultCard({ result }: TextResultCardProps) {
   const { verdict, confidence, reasoning, flaggedText, timestamp, claims } = result;
 
@@ -52,7 +62,7 @@ export default function TextResultCard({ result }: TextResultCardProps) {
                 {getVerdictLabel()}
               </span>
               <span className="text-sm text-gray-400">
-                {new Date(timestamp).toLocaleString()}
+                {formatDate(timestamp)}
               </span>
             </div>
             <h2 className="mt-4 text-2xl font-bold text-white md:text-3xl">

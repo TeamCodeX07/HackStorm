@@ -22,6 +22,7 @@ export interface IScan extends Document {
   isMock: boolean;
   timestamp: Date;
   claims?: any[];
+  searchResults?: any[];
   detectedRegions?: any[];
   detectedTimestamps?: any[];
   fileName?: string;
@@ -66,10 +67,10 @@ const ScanSchema = new Schema<IScan>({
   },
   timestamp: { 
     type: Date, 
-    default: Date.now,
-    index: true
+    default: Date.now
   },
-  claims: { type: Schema.Types.Mixed },
+  claims: { type: [String], default: undefined },
+  searchResults: { type: [Object], default: undefined },
   detectedRegions: { type: Schema.Types.Mixed },
   detectedTimestamps: { type: Schema.Types.Mixed },
   fileName: { type: String },

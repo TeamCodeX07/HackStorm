@@ -1,12 +1,10 @@
 import dotenv from 'dotenv';
-dotenv.config();
+dotenv.config({ override: true });
 
 import express, { Request, Response, NextFunction } from 'express';
 import cors from 'cors';
 import rateLimit from 'express-rate-limit';
 import mongoose from 'mongoose';
-import { initializeFirebaseAdmin } from './lib/firebaseAdmin';
-import { authenticateToken } from './middleware/auth';
 import scanRoutes from './routes/scan';
 import historyRoutes from './routes/history';
 import uploadRoutes from './routes/upload';
@@ -14,9 +12,24 @@ import statsRoutes from './routes/stats';
 
 async function startServer() {
   try {
-    // 1. Initialize Firebase Admin first (no DB needed)
-    initializeFirebaseAdmin();
-    console.log('✅ Firebase Admin initialized');
+    const REQUIRED = [
+      'MONGODB_URI',
+      'CEREBRAS_API_KEY',
+      'SERP_API_KEY'
+    ];
+
+    let allSet = true;
+    REQUIRED.forEach(key => {
+      if (!process.env[key]) {
+        console.error(`[Startup] ❌ MISSING: ${key}`);
+        allSet = false;
+      } else {
+        console.log(`[Startup] ✅ ${key.slice(0,20)}... is set`);
+      }
+    });
+    if (!allSet) process.exit(1);
+
+
 
     // 2. Setup Express app
     const app = express();
@@ -77,22 +90,12 @@ async function startServer() {
     // Registered routes
     app.use('/api/stats', statsRoutes);
 
-    // Triggered nodemon restart to load fresh database credentials // Public endpoint — no auth
-    app.use('/api/scan', authenticateToken, globalRateLimit, scanRoutes);
-    app.use('/api/scans', authenticateToken, globalRateLimit, historyRoutes);
-    app.use('/api/upload', authenticateToken, globalRateLimit, uploadRoutes);
+    // Triggered nodemon restart to load fixed Firebase credentials
+    app.use('/api/scan', globalRateLimit, scanRoutes);
+    app.use('/api/scans', globalRateLimit, historyRoutes);
+    app.use('/api/upload', globalRateLimit, uploadRoutes);
 
-    // Protected routes
-    app.get('/api/user/profile', authenticateToken, (req: Request, res: Response) => {
-      res.json({
-        success: true,
-        user: {
-          uid: req.user?.uid,
-          email: req.user?.email,
-          email_verified: req.user?.email_verified,
-        },
-      });
-    });
+
 
     // Global Error Handler
     app.use((err: any, req: Request, res: Response, next: NextFunction) => {

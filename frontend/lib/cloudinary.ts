@@ -1,5 +1,4 @@
-import { auth } from './firebase';
-
+import { getSessionId } from './session';
 /**
  * Uploads a file to the backend Cloudinary endpoint.
  * Requires Firebase ID token for authentication.
@@ -9,13 +8,11 @@ import { auth } from './firebase';
  * @returns {Promise<string>} - The secure URL of the uploaded file
  */
 export async function uploadToCloudinary(file: File, onProgress?: (pct: number) => void): Promise<string> {
-  const user = auth.currentUser;
-  
-  if (!user) {
-    throw new Error('You must be logged in to upload files.');
+  let sessionId = 'anonymous';
+  if (typeof window !== 'undefined') {
+    sessionId = getSessionId();
   }
-
-  const idToken = await user.getIdToken();
+  
   const formData = new FormData();
   formData.append('file', file);
 
@@ -26,7 +23,7 @@ export async function uploadToCloudinary(file: File, onProgress?: (pct: number) 
     const backendUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000';
     
     xhr.open('POST', `${backendUrl}/api/upload`);
-    xhr.setRequestHeader('Authorization', `Bearer ${idToken}`);
+    xhr.setRequestHeader('x-session-id', sessionId);
 
     if (onProgress) {
       xhr.upload.onprogress = (event) => {
@@ -50,7 +47,14 @@ export async function uploadToCloudinary(file: File, onProgress?: (pct: number) 
           reject(new Error('Invalid response from server'));
         }
       } else {
-        reject(new Error(`Server returned ${xhr.status}: ${xhr.statusText}`));
+        try {
+          const response = JSON.parse(xhr.responseText || '{}');
+          const message =
+            response.details || response.error || `Server returned ${xhr.status}: ${xhr.statusText}`;
+          reject(new Error(message));
+        } catch {
+          reject(new Error(`Server returned ${xhr.status}: ${xhr.statusText}`));
+        }
       }
     };
 

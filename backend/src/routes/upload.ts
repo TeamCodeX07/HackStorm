@@ -1,16 +1,23 @@
 import express, { Request, Response } from 'express';
 import multer from 'multer';
 import { v2 as cloudinary } from 'cloudinary';
-import { authenticateToken } from '../middleware/auth';
+
 
 const router = express.Router();
 
-// Cloudinary Configuration
-cloudinary.config({
+const cloudinaryConfig = {
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
   api_key: process.env.CLOUDINARY_API_KEY,
   api_secret: process.env.CLOUDINARY_API_SECRET,
-});
+};
+
+const hasCloudinaryConfig =
+  Boolean(cloudinaryConfig.cloud_name) &&
+  Boolean(cloudinaryConfig.api_key) &&
+  Boolean(cloudinaryConfig.api_secret);
+
+// Cloudinary Configuration
+cloudinary.config(cloudinaryConfig);
 
 // Multer Storage Configuration (Memory)
 const storage = multer.memoryStorage();
@@ -26,8 +33,16 @@ interface MulterRequest extends Request {
 }
 
 // POST /api/upload
-router.post('/', authenticateToken, upload.single('file'), async (req: MulterRequest, res: Response) => {
+router.post('/', upload.single('file'), async (req: MulterRequest, res: Response) => {
   try {
+    if (!hasCloudinaryConfig) {
+      return res.status(503).json({
+        error: 'Cloudinary is not configured on the backend',
+        code: 'CLOUDINARY_NOT_CONFIGURED',
+        details: 'Set CLOUDINARY_CLOUD_NAME, CLOUDINARY_API_KEY, and CLOUDINARY_API_SECRET in backend .env',
+      });
+    }
+
     if (!req.file) {
       return res.status(400).json({ error: 'No file uploaded' });
     }
@@ -45,7 +60,7 @@ router.post('/', authenticateToken, upload.single('file'), async (req: MulterReq
       return new Promise((resolve, reject) => {
         const stream = cloudinary.uploader.upload_stream(
           {
-            folder: `hackstorm_scans/${(req as any).user?.uid || 'guest'}`,
+            folder: `hackstorm_scans/${req.headers['x-session-id'] as string || 'guest'}`,
             resource_type: resourceType,
           },
           (error, result) => {
@@ -68,10 +83,39 @@ router.post('/', authenticateToken, upload.single('file'), async (req: MulterReq
       bytes: result.bytes,
     });
   } catch (error: any) {
-    console.error('Cloudinary upload error:', error);
-    res.status(500).json({
+    const rawMessage = String(error?.message || 'Unknown Cloudinary upload error');
+    const lower = rawMessage.toLowerCase();
+
+    console.error('Cloudinary upload error:', rawMessage);
+
+    if (lower.includes('invalid cloud_name')) {
+      return res.status(502).json({
+        error: 'Cloudinary configuration is invalid',
+        code: 'CLOUDINARY_INVALID_CLOUD_NAME',
+        details: 'CLOUDINARY_CLOUD_NAME is invalid. Update backend .env with your actual Cloudinary cloud name.',
+      });
+    }
+
+    if (lower.includes('invalid api key') || lower.includes('api key')) {
+      return res.status(502).json({
+        error: 'Cloudinary configuration is invalid',
+        code: 'CLOUDINARY_INVALID_API_KEY',
+        details: 'CLOUDINARY_API_KEY is invalid. Update backend .env with your Cloudinary API key.',
+      });
+    }
+
+    if (lower.includes('invalid signature') || lower.includes('api secret')) {
+      return res.status(502).json({
+        error: 'Cloudinary configuration is invalid',
+        code: 'CLOUDINARY_INVALID_SIGNATURE',
+        details: 'CLOUDINARY_API_SECRET appears invalid. Update backend .env with your Cloudinary API secret.',
+      });
+    }
+
+    return res.status(500).json({
       error: 'Failed to upload file to Cloudinary',
-      details: error.message,
+      code: 'CLOUDINARY_UPLOAD_FAILED',
+      details: rawMessage,
     });
   }
 });

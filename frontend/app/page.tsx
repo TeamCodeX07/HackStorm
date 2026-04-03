@@ -67,7 +67,7 @@ export default function LandingPage() {
             <Link href="/history" className="hover:text-white transition-colors">History</Link>
           </div>
           <Link 
-            href="/auth" 
+            href="/scan" 
             className="rounded-full bg-white px-5 py-2 text-sm font-bold text-black transition-all hover:bg-gray-200 active:scale-95"
           >
             Get Started
@@ -94,7 +94,7 @@ export default function LandingPage() {
           </p>
           <div className="mt-12 flex flex-col items-center justify-center gap-4 sm:flex-row">
             <Link 
-              href="/auth" 
+              href="/scan" 
               className="w-full rounded-full bg-blue-600 px-8 py-4 text-lg font-bold text-white transition-all hover:bg-blue-500 hover:shadow-[0_0_30px_rgba(37,99,235,0.4)] active:scale-95 sm:w-auto"
             >
               Try it Free

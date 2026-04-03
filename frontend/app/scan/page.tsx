@@ -1,19 +1,19 @@
 'use client';
 
 import React, { useState } from 'react';
-import ProtectedRoute from '@/components/ProtectedRoute';
-import { useAuth } from '@/context/AuthContext';
+
 import TextResultCard from '@/components/TextResultCard';
 import MediaUploader from '@/components/MediaUploader';
 import MediaResultCard from '@/components/MediaResultCard';
 import ScanSkeleton from '@/components/ScanSkeleton';
 import { toast } from 'react-hot-toast';
+import { apiFetch } from '@/lib/apiFetch';
 
 type ScanType = 'text' | 'media';
 type TextScanMode = 'url' | 'text';
 
 export default function ScanPage() {
-  const { user } = useAuth();
+
   const [scanType, setScanType] = useState<ScanType>('text');
   const [textMode, setTextMode] = useState<TextScanMode>('url');
   const [textValue, setTextValue] = useState('');
@@ -34,17 +34,12 @@ export default function ScanPage() {
     const toastId = toast.loading('Analyzing content...');
 
     try {
-      if (!user) throw new Error('You must be logged in to perform a scan.');
 
-      const idToken = await user.getIdToken();
+
       const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:5000';
 
-      const response = await fetch(`${backendUrl}/api/scan/text`, {
+      const response = await apiFetch(`${backendUrl}/api/scan/text`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${idToken}`,
-        },
         body: JSON.stringify({
           [textMode]: textValue,
         }),
@@ -56,7 +51,17 @@ export default function ScanPage() {
         if (response.status === 429) {
           throw new Error(`Rate limit exceeded. Please wait ${data.retryAfter}s.`);
         }
-        throw new Error(data.error || data.message || 'Something went wrong during the scan.');
+        const messages: Record<string, string> = {
+          'URL_FETCH_FAILED': 'Could not fetch the article. Try pasting the text directly.',
+          'TEXT_TOO_SHORT': textMode === 'url'
+            ? 'Not enough content found at this URL. Try pasting the text directly.'
+            : 'Text is too short. Please paste at least 50 characters to analyze.',
+          'CEREBRAS_CLAIMS_FAILED': 'AI analysis failed. Check your Cerebras API key.',
+          'CEREBRAS_VERDICT_FAILED': 'AI verdict synthesis failed. Please try again.',
+          'SERP_FAILED': 'Fact-checking search failed. Please try again.',
+          'UNKNOWN_ERROR': 'Something went wrong. Check backend logs.',
+        };
+        throw new Error(messages[data.code] || data.error || data.message || 'Analysis failed');
       }
 
       setTextResult(data);
@@ -84,17 +89,12 @@ export default function ScanPage() {
     const toastId = toast.loading(`Processing ${type} analysis...`);
 
     try {
-      if (!user) throw new Error('You must be logged in.');
 
-      const idToken = await user.getIdToken();
+
       const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:5000';
 
-      const response = await fetch(`${backendUrl}/api/scan/media`, {
+      const response = await apiFetch(`${backendUrl}/api/scan/media`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${idToken}`,
-        },
         body: JSON.stringify({
           fileUrl: url,
           mediaType: type,
@@ -128,8 +128,7 @@ export default function ScanPage() {
 
 
   return (
-    <ProtectedRoute>
-      <div className="min-h-screen bg-gradient-to-br from-gray-950 via-gray-900 to-black p-4 py-8 md:p-8">
+    <div className="min-h-screen bg-gradient-to-br from-gray-950 via-gray-900 to-black p-4 py-8 md:p-8">
         <div className="mx-auto max-w-4xl">
           <div className="mb-12 text-center animate-in fade-in slide-in-from-top-4 duration-700">
             <h1 className="text-4xl font-black tracking-tight text-white md:text-5xl lg:text-6xl">
@@ -197,6 +196,7 @@ export default function ScanPage() {
                       value={textValue}
                       onChange={(e) => setTextValue(e.target.value)}
                       rows={8}
+                      minLength={50}
                       className="w-full resize-none rounded-2xl border border-white/10 bg-black/40 p-4 text-white placeholder-gray-600 outline-none transition-all focus:border-blue-500/50 focus:ring-4 focus:ring-blue-500/10 group-hover:border-white/20"
                       required
                     />
@@ -258,7 +258,6 @@ export default function ScanPage() {
           {mediaResult && <MediaResultCard result={mediaResult} />}
         </div>
       </div>
-    </ProtectedRoute>
   );
 }
 

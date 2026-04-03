@@ -1,7 +1,6 @@
 'use client';
 
 import React, { useState, useRef } from 'react';
-import { useAuth } from '@/context/AuthContext';
 import { uploadToCloudinary } from '@/lib/cloudinary';
 
 interface MediaUploaderProps {
@@ -21,7 +20,6 @@ const MAX_SIZES = {
 };
 
 export default function MediaUploader({ onSuccess }: MediaUploaderProps) {
-  const { user } = useAuth();
   const [isDragging, setIsDragging] = useState(false);
   const [progress, setProgress] = useState(0);
   const [uploading, setUploading] = useState(false);
@@ -54,10 +52,6 @@ export default function MediaUploader({ onSuccess }: MediaUploaderProps) {
       return;
     }
 
-    if (!user) {
-      setError('You must be logged in to upload files.');
-      return;
-    }
 
     setError(null);
     setUploading(true);

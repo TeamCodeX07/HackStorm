@@ -3,8 +3,7 @@
 import React, { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import ProtectedRoute from '@/components/ProtectedRoute';
-import { useAuth } from '@/context/AuthContext';
+import { apiFetch } from '@/lib/apiFetch';
 
 interface Scan {
   _id: string;
@@ -18,7 +17,7 @@ interface Scan {
 }
 
 export default function HistoryPage() {
-  const { user } = useAuth();
+
   const router = useRouter();
   const [scans, setScans] = useState<Scan[]>([]);
   const [loading, setLoading] = useState(true);
@@ -27,16 +26,11 @@ export default function HistoryPage() {
   const [deletingId, setDeletingId] = useState<string | null>(null);
 
   const fetchHistory = async (p: number) => {
-    if (!user) return;
+
     setLoading(true);
     try {
-      const idToken = await user.getIdToken();
       const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:5000';
-      const response = await fetch(`${backendUrl}/api/scans?page=${p}&limit=10`, {
-        headers: {
-          'Authorization': `Bearer ${idToken}`,
-        },
-      });
+      const response = await apiFetch(`${backendUrl}/api/scans?page=${p}&limit=10`);
       const data = await response.json();
       if (response.ok) {
         setScans(data.scans);
@@ -51,24 +45,20 @@ export default function HistoryPage() {
 
   useEffect(() => {
     fetchHistory(page);
-  }, [user, page]);
+  }, [page]);
 
   const handleDelete = async (e: React.MouseEvent, id: string) => {
     e.preventDefault();
     e.stopPropagation();
     
-    if (!user || deletingId) return;
+    if (deletingId) return;
     if (!confirm('Are you sure you want to delete this scan?')) return;
 
     setDeletingId(id);
     try {
-      const idToken = await user.getIdToken();
       const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:5000';
-      const response = await fetch(`${backendUrl}/api/scans/${id}`, {
+      const response = await apiFetch(`${backendUrl}/api/scans/${id}`, {
         method: 'DELETE',
-        headers: {
-          'Authorization': `Bearer ${idToken}`,
-        },
       });
 
       if (response.ok) {
@@ -141,8 +131,7 @@ export default function HistoryPage() {
   };
 
   return (
-    <ProtectedRoute>
-      <div className="min-h-screen bg-gradient-to-br from-gray-950 via-gray-900 to-black p-4 py-8 md:p-8">
+    <div className="min-h-screen bg-gradient-to-br from-gray-950 via-gray-900 to-black p-4 py-8 md:p-8">
         <div className="mx-auto max-w-6xl">
           <div className="mb-10 flex flex-col items-center justify-between gap-4 md:flex-row">
             <div>
@@ -269,6 +258,5 @@ export default function HistoryPage() {
           )}
         </div>
       </div>
-    </ProtectedRoute>
   );
 }
