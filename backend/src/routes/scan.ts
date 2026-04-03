@@ -116,109 +116,172 @@ const scanRateLimit = rateLimit({
  * @route POST /api/scan/text
  * @desc Scan text or a URL for factual authenticity
  */
-router.post('/text', scanRateLimit, async (req: Request, res: Response) => {
+router.post('/text', async (req: any, res: Response) => {
   const startTime = Date.now();
   const { url, text } = req.body;
+  const sessionId = req.headers['x-session-id'] as string || 'anonymous';
 
   if (!url && !text) {
-    return res.status(400).json({ 
-      error: 'Provide either a URL or text', 
-      code: 'MISSING_INPUT' 
+    return res.status(400).json({
+      error: 'Provide either a URL or article text.',
+      code: 'MISSING_INPUT'
     });
   }
 
-  // ---- STEP A: Get article text ----
-  let articleText = text?.trim() || '';
+  // ============================================
+  // PHASE 1 - CONTENT EXTRACTION (URL only)
+  // ============================================
+  let articleText = '';
+  let inputType = 'text';
 
   if (url) {
+    inputType = 'url';
+    console.log('[Phase 1] Fetching URL:', url);
+
     try {
-      console.log('[Scan] Fetching URL:', url);
-      const { data } = await axios.get(url, {
+      const { data: html } = await axios.get(url, {
         timeout: 15000,
         headers: {
           'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) ' +
             'AppleWebKit/537.36 (KHTML, like Gecko) ' +
-            'Chrome/120.0.0.0 Safari/537.36'
-        }
+            'Chrome/120.0.0.0 Safari/537.36',
+          'Accept': 'text/html,application/xhtml+xml',
+          'Accept-Language': 'en-US,en;q=0.9',
+        },
       });
-      const $ = cheerio.load(data);
-      $('script, style, nav, footer, header, aside, iframe, noscript').remove();
-      
-      // Try multiple selectors to extract article content
-      const selectors = [
-        'article', '[role="main"]', '.story-body', 
-        '.article__body', '.article-body', 
-        'main', '.content', '.post-content', 'body'
+
+      const $ = cheerio.load(html);
+
+      // Remove all noise
+      $(
+        'script, style, nav, footer, header, aside, iframe, ' +
+        'noscript, .nav, .menu, .sidebar, .advertisement, ' +
+        '.ads, .social-share, .comments, .related-articles, ' +
+        '[role="navigation"], [role="banner"], [role="complementary"]'
+      ).remove();
+
+      // Try selectors from most specific to least specific
+      const ARTICLE_SELECTORS = [
+        'article',
+        '[role="main"]',
+        '.article-body',
+        '.article__body',
+        '.story-body',
+        '.post-content',
+        '.entry-content',
+        '.article-content',
+        '.content-body',
+        '#article-body',
+        '#main-content',
+        'main',
+        '.content',
       ];
-      
-      for (const sel of selectors) {
-        const extracted = $(sel).first().text()
-          .replace(/\s+/g, ' ').trim();
+
+      for (const selector of ARTICLE_SELECTORS) {
+        const el = $(selector).first();
+        if (!el.length) continue;
+
+        const extracted = el
+          .text()
+          .replace(/\s+/g, ' ')
+          .replace(/\n+/g, ' ')
+          .trim();
+
         if (extracted.length > 200) {
           articleText = extracted.slice(0, 6000);
+          console.log(
+            `[Phase 1] Extracted via "${selector}": ${articleText.length} chars`
+          );
           break;
         }
       }
-      
-      console.log('[Scan] Extracted text length:', articleText.length);
+
+      // Fallback to full body if nothing found
+      if (!articleText || articleText.length < 200) {
+        articleText = $('body').text().replace(/\s+/g, ' ').trim().slice(0, 6000);
+        console.log('[Phase 1] Fallback to body:', articleText.length, 'chars');
+      }
     } catch (err: any) {
-      console.error('[Scan] URL fetch error:', err.message);
+      console.error('[Phase 1] URL fetch failed:', err.message);
       return res.status(400).json({
-        error: 'Could not fetch article. Try pasting the text directly.',
+        error: 'Could not fetch this URL. The website may be blocking scrapers. Try pasting the article text directly.',
         code: 'URL_FETCH_FAILED',
-        detail: err.message
+        detail: err.message,
+      });
+    }
+
+    // URL extraction needs at least 100 chars
+    if (articleText.length < 100) {
+      return res.status(400).json({
+        error: 'Could not extract enough content from this URL. Try pasting the text directly.',
+        code: 'EXTRACTION_TOO_SHORT',
+        extracted: articleText.length,
+      });
+    }
+
+  } else {
+    // TEXT input - use directly, skip extraction
+    articleText = text.trim();
+    console.log('[Phase 1] Using pasted text:', articleText.length, 'chars');
+
+    // Text paste only needs 50 chars minimum
+    if (articleText.length < 50) {
+      return res.status(400).json({
+        error: 'Please provide at least 50 characters of text to analyze.',
+        code: 'TEXT_TOO_SHORT',
+        provided: articleText.length,
       });
     }
   }
 
-  // For direct text, require at least 50 chars; for URL-extracted, require 100
-  const minLength = url ? 100 : 50;
-  if (!articleText || articleText.length < minLength) {
-    return res.status(400).json({
-      error: url
-        ? 'Not enough content extracted from the URL. Try pasting the article text instead.'
-        : `Text is too short (${articleText?.length || 0} chars). Please provide at least 50 characters to analyze.`,
-      code: 'TEXT_TOO_SHORT',
-      extracted: articleText?.length || 0
-    });
-  }
-
-  // ---- STEP B: Extract claims via Cerebras ----
-  console.log('[Scan] Calling Cerebras for claim extraction...');
+  // ============================================
+  // PHASE 2 - AI CLAIM EXTRACTION (Cerebras)
+  // ============================================
+  console.log('[Phase 2] Extracting claims via Cerebras...');
   let claims: string[] = [];
   
   try {
     const claimRes = await axios.post(
       'https://api.cerebras.ai/v1/chat/completions',
       {
-        model: 'llama3.1-8b',
-        max_tokens: 800,
+        model: 'llama-3.3-70b',
+        max_tokens: 1000,
+        temperature: 0.1,
         messages: [{
+          role: 'system',
+          content: `You are a Senior Fact-Checker at a professional 
+          fact-checking organization. Your job is to identify 
+          verifiable factual claims in articles.`
+        }, {
           role: 'user',
-          content: `You are an expert fact-checking analyst. Your job is to read the article below and extract the most important verifiable factual claims that could potentially be true, false, or misleading.
+          content: `Read the following article carefully and extract 
+exactly 5 verifiable factual claims.
 
-Focus on:
-- Specific statistics or numbers mentioned
-- Claims about events that happened
-- Claims about people, organizations, or governments
+INCLUDE claims that are:
+- Specific statistics or numbers (e.g., "X% of people...", "Y million dollars...")
+- Claims about specific events with dates
+- Claims about what a person, organization, or government did or said
 - Scientific or medical claims
-- Claims that sound exaggerated or sensational
-- Claims that directly contradict common knowledge
+- Claims that sound sensational or exaggerated
+- Claims that could be verified by searching the web
 
-DO NOT extract:
-- Opinions or editorials
-- Vague statements
+EXCLUDE:
+- Opinions or subjective statements
+- Vague generalizations
 - Questions
+- Predictions about the future
 
 Article:
-${articleText.slice(0, 5000)}
+"""
+${articleText}
+"""
 
-Return ONLY a JSON array of exactly 5 strings.
-Start with [ and end with ].
-No markdown. No backticks. No explanation.
+Return ONLY a raw JSON array of exactly 5 strings.
+MUST start with [ and end with ].
+No markdown. No backticks. No text before or after.
+Each claim must be a complete, specific sentence.
 
-Example format:
-["Claim 1 as a complete sentence.", "Claim 2.", "Claim 3.", "Claim 4.", "Claim 5."]`
+["Specific claim 1.", "Specific claim 2.", "Specific claim 3.", "Specific claim 4.", "Specific claim 5."]`
         }]
       },
       {
@@ -233,48 +296,41 @@ Example format:
     const raw = claimRes.data.choices?.[0]?.message?.content?.trim();
     if (!raw) throw new Error('Empty response from Cerebras');
     
-    console.log('[Scan] Cerebras claims raw:', raw.slice(0, 300));
+    console.log('[Phase 2] Raw response:', raw.slice(0, 300));
     
-    // Strip markdown if model added it anyway
+    // Strip markdown fences if model added them
     const cleaned = raw
       .replace(/^```json\s*/i, '')
       .replace(/^```\s*/i, '')
       .replace(/\s*```$/i, '')
       .trim();
 
-    // Find the JSON array even if there's surrounding text
+    // Extract JSON array even if surrounded by text
     const arrayMatch = cleaned.match(/\[[\s\S]*\]/);
     if (!arrayMatch) {
-      throw new Error(`No JSON array found in response: ${cleaned.slice(0, 200)}`);
+      throw new Error('No JSON array in response: ' + cleaned.slice(0, 200));
     }
 
-    let parsed: any = [];
-    try {
-      parsed = JSON.parse(arrayMatch[0]);
-    } catch {
-      // Fallback: extract quoted strings from malformed array-like output.
-      const quotedMatches = [
-        ...arrayMatch[0].matchAll(/"([^"\\]*(?:\\.[^"\\]*)*)"/g),
-      ] as RegExpMatchArray[];
-      const quotedClaims = quotedMatches.map((match) => match[1]);
-      parsed = quotedClaims;
-    }
+    const parsed = JSON.parse(arrayMatch[0]);
 
     if (!Array.isArray(parsed) || parsed.length === 0) {
       throw new Error('Parsed result is not a valid array');
     }
 
     claims = parsed
-      .filter((c: any) => typeof c === 'string' && c.trim().length > 5)
+      .filter((c: any) => typeof c === 'string' && c.trim().length > 10)
       .slice(0, 5);
 
-    console.log('[Scan] Claims extracted:', claims.length);
+    if (claims.length < 2) {
+      throw new Error(`Too few valid claims extracted: ${claims.length}`);
+    }
+
+    console.log('[Phase 2] Claims extracted:', claims.length);
     claims.forEach((c, i) => console.log(`  [${i+1}] ${c.slice(0, 80)}`));
 
   } catch (err: any) {
-    console.error('[Scan] Cerebras claim extraction FAILED:');
-    console.error('  Status:', err.response?.status);
-    console.error('  Error:', err.response?.data || err.message);
+    console.error('[Phase 2] Claim extraction FAILED:', err.message);
+    console.error('  API response:', err.response?.data);
     return res.status(502).json({
       error: 'AI claim extraction failed. Please try again.',
       code: 'CEREBRAS_CLAIMS_FAILED',
@@ -282,148 +338,272 @@ Example format:
     });
   }
 
-  // ---- STEP C: Search each claim via SerpAPI ----
-  console.log('[Scan] Querying SerpAPI for', claims.length, 'claims...');
-  let searchResults: any[] = [];
+  // ============================================
+  // PHASE 3 - LIVE FACT-CHECKING (SerpAPI)
+  // ============================================
+  console.log('[Phase 3] Live fact-checking via SerpAPI...');
+  let rawSearchResults: any[] = [];
   let enrichedResults: any[] = [];
-  let preCheck = {
-    factCheckCount: 0,
-    highCredCount: 0,
-    lowCredCount: 0,
-    debunkingSignals: 0,
-  };
 
   try {
-    searchResults = await Promise.all(
+    rawSearchResults = await Promise.all(
       claims.slice(0, 3).map(async (claim: string) => {
-        const query1 = buildSearchQuery(claim);
-        const query2 = `fact check: ${query1}`.slice(0, 120);
+        const baseQuery = claim
+          .replace(/according to|it is reported|sources say|allegedly/gi, '')
+          .replace(/\s+/g, ' ')
+          .trim()
+          .slice(0, 120);
 
-        const [res1, res2] = await Promise.all([
+        const factCheckQuery = `fact check ${baseQuery}`.slice(0, 150);
+
+        console.log(`[Phase 3] Searching: "${baseQuery.slice(0, 60)}..."`);
+
+        const [generalRes, factCheckRes] = await Promise.allSettled([
           axios.get('https://serpapi.com/search', {
             params: {
-              q: query1,
+              q: baseQuery,
               api_key: process.env.SERP_API_KEY,
               num: 3,
               engine: 'google',
               gl: 'us',
-              hl: 'en',
+              hl: 'en'
             },
             timeout: 15000,
           }),
           axios.get('https://serpapi.com/search', {
             params: {
-              q: query2,
+              q: factCheckQuery,
               api_key: process.env.SERP_API_KEY,
               num: 2,
               engine: 'google',
               gl: 'us',
-              hl: 'en',
+              hl: 'en'
             },
             timeout: 15000,
           }),
         ]);
 
-        const supportingSources = (res1.data.organic_results || [])
-          .slice(0, 3)
-          .map((r: any) => ({
-            title: r.title || '',
-            snippet: r.snippet || '',
-            link: r.link || ''
-          }));
+        const generalSources = generalRes.status === 'fulfilled'
+          ? (generalRes.value.data.organic_results || []).slice(0, 3).map((r: any) => ({
+              title: r.title || '',
+              snippet: r.snippet || '',
+              link: r.link || '',
+              searchType: 'general'
+            }))
+          : [];
 
-        const factCheckSources = (res2.data.organic_results || [])
-          .slice(0, 2)
-          .map((r: any) => ({
-            title: r.title || '',
-            snippet: r.snippet || '',
-            link: r.link || '',
-            type: 'fact-check',
-          }));
+        const factCheckSources = factCheckRes.status === 'fulfilled'
+          ? (factCheckRes.value.data.organic_results || []).slice(0, 2).map((r: any) => ({
+              title: r.title || '',
+              snippet: r.snippet || '',
+              link: r.link || '',
+              searchType: 'fact-check'
+            }))
+          : [];
 
-        const normalizedSupporting = supportingSources.map((source: any) => ({
-          ...source,
-          type: 'supporting',
-        }));
-
-        const sources = [...normalizedSupporting, ...factCheckSources];
-
-        console.log(`  Claim "${claim.slice(0, 50)}..." → ${sources.length} sources`);
-        return { claim, sources };
+        return {
+          claim,
+          sources: [...generalSources, ...factCheckSources]
+        };
       })
     );
 
-    enrichedResults = enrichSources(searchResults);
-    preCheck = preAnalysis(enrichedResults);
-
-    console.log('[Scan] Pre-analysis:', preCheck);
-    console.log('[Scan] SerpAPI search complete');
+    console.log('[Phase 3] Search complete for', rawSearchResults.length, 'claims');
   } catch (err: any) {
-    console.error('[Scan] SerpAPI FAILED:', err.response?.data || err.message);
+    console.error('[Phase 3] SerpAPI FAILED:', err.response?.data || err.message);
     return res.status(502).json({
-      error: 'Fact-checking search failed. Please try again.',
+      error: 'Live fact-checking search failed. Please try again.',
       code: 'SERP_FAILED',
-      detail: err.response?.data?.error || err.message
+      detail: err.message
     });
   }
 
-  // ---- STEP D: Verdict synthesis via Cerebras ----
-  console.log('[Scan] Calling Cerebras for verdict synthesis...');
+  // ============================================
+  // PHASE 4 - PRE-ANALYSIS & SIGNAL DETECTION
+  // ============================================
+  console.log('[Phase 4] Running pre-analysis and signal detection...');
+
+  const HIGH_CREDIBILITY_DOMAINS = [
+    'reuters.com', 'apnews.com', 'bbc.com', 'bbc.co.uk',
+    'nytimes.com', 'theguardian.com', 'washingtonpost.com',
+    'bloomberg.com', 'economist.com', 'nature.com',
+    'science.org', 'ncbi.nlm.nih.gov', 'who.int',
+    'cdc.gov', 'nasa.gov', 'noaa.gov', 'un.org',
+    'britannica.com', 'nationalgeographic.com'
+  ];
+
+  const FACT_CHECKER_DOMAINS = [
+    'snopes.com', 'politifact.com', 'factcheck.org',
+    'fullfact.org', 'afpfactcheck.com', 'boomlive.in',
+    'altnews.in', 'reuters.com/fact-check',
+    'apnews.com/hub/ap-fact-check', 'misbar.com',
+    'leadstories.com', 'checkyourfact.com'
+  ];
+
+  const LOW_CREDIBILITY_DOMAINS = [
+    'naturalnews.com', 'infowars.com', 'beforeitsnews.com',
+    'worldnewsdailyreport.com', 'empirenews.net',
+    'thelastlineofdefense.org', 'newslo.com'
+  ];
+
+  const DEBUNK_KEYWORDS = [
+    'false', 'misinformation', 'debunked', 'misleading',
+    'not true', 'no evidence', 'fabricated', 'hoax',
+    'fake', 'incorrect', 'inaccurate', 'manipulated',
+    'satire', 'parody', 'conspiracy', 'unverified',
+    'disinformation', 'fact check: false', 'pants on fire',
+    'mostly false', 'four pinocchios'
+  ];
+
+  const SUPPORT_KEYWORDS = [
+    'confirmed', 'verified', 'true', 'accurate',
+    'fact check: true', 'mostly true', 'supported by',
+    'evidence shows', 'research confirms', 'scientists confirm',
+    'officially confirmed', 'studies show'
+  ];
+
+  const getDomain = (url: string): string => {
+    try { return new URL(url).hostname.replace('www.', ''); }
+    catch { return ''; }
+  };
+
+  // Score every source
+  enrichedResults = rawSearchResults.map((result) => ({
+    ...result,
+    sources: result.sources.map((source: any) => {
+      const domain = getDomain(source.link);
+      const snippet = (source.snippet || '').toLowerCase();
+      const title = (source.title || '').toLowerCase();
+      const combined = snippet + ' ' + title;
+
+      const isFactChecker = FACT_CHECKER_DOMAINS.some((d) => domain.includes(d));
+      const isHighCred = HIGH_CREDIBILITY_DOMAINS.some((d) => domain.includes(d));
+      const isLowCred = LOW_CREDIBILITY_DOMAINS.some((d) => domain.includes(d));
+      const hasDebunkSignal = DEBUNK_KEYWORDS.some((w) => combined.includes(w));
+      const hasSupportSignal = SUPPORT_KEYWORDS.some((w) => combined.includes(w));
+
+      return {
+        ...source,
+        domain,
+        credibility: isHighCred ? 'high' : isLowCred ? 'low' : 'medium',
+        isFactChecker,
+        hasDebunkSignal,
+        hasSupportSignal
+      };
+    })
+  }));
+
+  // Count signals
+  let factCheckerCount = 0;
+  let highCredCount = 0;
+  let lowCredCount = 0;
+  let debunkSignals = 0;
+  let supportSignals = 0;
+
+  enrichedResults.forEach((result) => {
+    result.sources.forEach((source: any) => {
+      if (source.isFactChecker) factCheckerCount++;
+      if (source.credibility === 'high') highCredCount++;
+      if (source.credibility === 'low') lowCredCount++;
+      if (source.hasDebunkSignal) debunkSignals++;
+      if (source.hasSupportSignal) supportSignals++;
+    });
+  });
+
+  console.log('[Phase 4] Signals:', {
+    factCheckerCount,
+    highCredCount,
+    lowCredCount,
+    debunkSignals,
+    supportSignals
+  });
+
+  const preCheck = {
+    factCheckCount: factCheckerCount,
+    highCredCount,
+    lowCredCount,
+    debunkingSignals: debunkSignals,
+  };
+
+  // ============================================
+  // PHASE 5 - FINAL VERDICT SYNTHESIS (Cerebras)
+  // ============================================
+  console.log('[Phase 5] Synthesizing final verdict via Cerebras...');
   
   try {
     const verdictRes = await axios.post(
       'https://api.cerebras.ai/v1/chat/completions',
       {
-        model: 'llama3.1-8b',
-        max_tokens: 1000,
+        model: 'llama-3.3-70b',
+        max_tokens: 1200,
+        temperature: 0.1,
         messages: [{
+          role: 'system',
+          content: `You are a Senior Misinformation Analyst at a 
+          professional fact-checking organization. You make accurate,
+          evidence-based verdicts only. You never guess. You base 
+          every decision strictly on what the evidence shows.`
+        }, {
           role: 'user',
-          content: `You are a senior misinformation analyst at a fact-checking organization. You have been given a set of claims from an article and web search results for each claim.
+          content: `Analyze the following claims and their real-time 
+web search results to determine if the content is authentic, 
+manipulated, or uncertain.
 
-Your job is to give an honest, evidence-based verdict.
+=== VERDICT DEFINITIONS ===
+"authentic": Claims are well-supported by credible sources. 
+  Facts check out. High-credibility outlets confirm the claims.
+  No debunking signals found.
 
-VERDICT DEFINITIONS - follow these strictly:
-- "authentic": The claims are well-supported by credible sources. Facts check out. No major inaccuracies found.
-- "manipulated": One or more claims are demonstrably false, misleading, taken out of context, or contradict credible sources. Fact-checkers have debunked similar claims.
-- "uncertain": Claims cannot be clearly verified or debunked. Sources are mixed, limited, or contradictory.
+"manipulated": One or more claims are demonstrably false or 
+  misleading. Fact-checkers have articles debunking the claims.
+  Search results contain words like "false", "hoax", "debunked".
+  Claims contradict verified information from credible sources.
 
-CONFIDENCE SCORE GUIDE:
-- 90-100: Overwhelming evidence clearly supports the verdict
-- 75-89:  Strong evidence supports the verdict
-- 60-74:  Moderate evidence, some uncertainty remains
-- 45-59:  Weak evidence, verdict could go either way
-- Below 45: Very little evidence found
+"uncertain": Cannot clearly verify OR debunk. Evidence is mixed,
+  limited, or contradictory. Claims are unverifiable with 
+  available information.
 
-ANALYSIS INSTRUCTIONS:
-1. Read each claim carefully
-2. Look at supporting sources - do they confirm the claim?
-3. Look at fact-check sources - do they debunk the claim?
-4. Consider the credibility of sources (BBC, Reuters, AP = high credibility)
-5. If fact-checkers (Snopes, PolitiFact, FactCheck.org) appear = strong signal
-6. Make your verdict based on EVIDENCE ONLY
+=== CONFIDENCE SCORING GUIDE ===
+95-100: Overwhelming clear evidence (multiple fact-checkers agree)
+85-94:  Strong evidence from multiple high-credibility sources
+70-84:  Moderate evidence, mostly supports one verdict
+55-69:  Some evidence but significant uncertainty remains
+40-54:  Very limited evidence, verdict is a weak judgment
+1-39:   Almost no evidence found (use "uncertain")
 
-Claims and search results:
+=== AUTOMATED PRE-ANALYSIS (trust these signals) ===
+- Fact-checker sources found: ${factCheckerCount}
+  ${factCheckerCount > 0 ? '⚠️ IMPORTANT: Fact-checkers are covering these claims' : ''}
+- High-credibility sources (Reuters, BBC, AP, etc.): ${highCredCount}
+- Low-credibility sources: ${lowCredCount}  
+- Debunking signals detected: ${debunkSignals}
+  ${debunkSignals > 2 ? '🚨 STRONG DEBUNKING SIGNAL: Multiple sources flag these claims as false' : ''}
+- Supporting signals detected: ${supportSignals}
+  ${supportSignals > 2 ? '✅ STRONG SUPPORT SIGNAL: Multiple sources confirm these claims' : ''}
+
+=== DECISION LOGIC ===
+IF debunkSignals >= 3 OR (factCheckerCount >= 1 AND debunkSignals >= 1):
+  → Lean strongly toward "manipulated"
+IF highCredCount >= 4 AND debunkSignals === 0 AND supportSignals >= 2:
+  → Lean strongly toward "authentic"  
+IF evidence is mixed or minimal:
+  → Use "uncertain"
+
+=== CLAIMS AND SEARCH RESULTS ===
 ${JSON.stringify(enrichedResults, null, 2)}
 
-IMPORTANT CONTEXT from automated pre-analysis:
-- Fact-checker sources found: ${preCheck.factCheckCount}
-- High-credibility sources found: ${preCheck.highCredCount}
-- Low-credibility sources found: ${preCheck.lowCredCount}
-- Debunking signals detected: ${preCheck.debunkingSignals}
-
-If debunking signals > 2 or fact-checkers found debunking claims,
-strongly consider "manipulated" verdict.
-If high-credibility sources > 4 and debunking signals = 0,
-strongly consider "authentic" verdict.
-
-Return ONLY a JSON object. Start with { and end with }.
+Return ONLY a raw JSON object.
+MUST start with { and end with }.
 No markdown. No backticks. No text before or after.
 
 {
   "verdict": "authentic" | "manipulated" | "uncertain",
   "confidence": <integer 1-100>,
-  "flaggedText": ["claim that is suspicious or false"],
-  "reasoning": "3-4 sentences explaining exactly what evidence you found and why you gave this verdict. Be specific about which sources confirmed or denied which claims."
+  "flaggedText": ["most suspicious or false claim here"],
+  "reasoning": "3-4 sentences citing SPECIFIC evidence. 
+    Mention which sources confirmed or denied which claims. 
+    Be precise about what the fact-checkers found or what 
+    high-credibility sources said. Never be vague."
 }`
         }]
       },
@@ -437,9 +617,9 @@ No markdown. No backticks. No text before or after.
     );
 
     const raw = verdictRes.data.choices?.[0]?.message?.content?.trim();
-    if (!raw) throw new Error('Empty verdict response from Cerebras');
+  if (!raw) throw new Error('Empty verdict response');
     
-    console.log('[Scan] Cerebras verdict raw:', raw.slice(0, 400));
+  console.log('[Phase 5] Raw verdict response:', raw.slice(0, 400));
 
     const cleaned = raw
       .replace(/^```json\s*/i, '')
@@ -447,33 +627,32 @@ No markdown. No backticks. No text before or after.
       .replace(/\s*```$/i, '')
       .trim();
 
-    // Find JSON object even if surrounded by text
     const objMatch = cleaned.match(/\{[\s\S]*\}/);
-    if (!objMatch) {
-      throw new Error(`No JSON object found: ${cleaned.slice(0, 200)}`);
-    }
+    if (!objMatch) throw new Error('No JSON object found: ' + cleaned.slice(0, 200));
 
     const parsed = JSON.parse(objMatch[0]);
 
-    // Strict validation — no defaults allowed
+    // Strict field validation
     const validVerdicts = ['authentic', 'manipulated', 'uncertain'];
     if (!validVerdicts.includes(parsed.verdict)) {
-      throw new Error(`Invalid verdict value: "${parsed.verdict}"`);
+      throw new Error(`Invalid verdict: "${parsed.verdict}"`);
     }
-    if (typeof parsed.confidence !== 'number' || 
+    if (typeof parsed.confidence !== 'number' ||
         parsed.confidence < 1 || parsed.confidence > 100) {
       throw new Error(`Invalid confidence: "${parsed.confidence}"`);
     }
-    if (!parsed.reasoning || parsed.reasoning.trim().length < 20) {
+    if (!parsed.reasoning || parsed.reasoning.trim().length < 30) {
       throw new Error(`Reasoning too short: "${parsed.reasoning}"`);
     }
 
-    let verdict    = parsed.verdict as string;
+    let verdict    = parsed.verdict;
     let confidence = Math.round(parsed.confidence);
     const reasoning  = parsed.reasoning.trim();
     const flaggedText = Array.isArray(parsed.flaggedText)
       ? parsed.flaggedText.filter((f: any) => typeof f === 'string')
       : [];
+
+    console.log('[Phase 5] Final verdict:', verdict, '| Confidence:', confidence + '%');
 
     if (
       verdict === 'authentic' &&
@@ -491,26 +670,31 @@ No markdown. No backticks. No text before or after.
 
     console.log('[Scan] Verdict:', verdict, '| Confidence:', confidence + '%');
 
-    // ---- STEP E: Save to MongoDB ----
+    // ============================================
+    // PHASE 6 - SAVE TO MONGODB
+    // ============================================
     const latencyMs = Date.now() - startTime;
     const timestamp = new Date();
     
     const scan = await Scan.create({
-      userId: req.headers['x-session-id'] as string || 'anonymous',
+      userId: sessionId,
       mediaType: 'text',
+      inputType,
       sourceUrl: url || null,
+      originalText: text || null,
       verdict,
       confidence,
       flaggedText,
       reasoning,
       claims,
       searchResults: enrichedResults,
+      signals: { factCheckerCount, highCredCount, debunkSignals, supportSignals },
       isMock: false,
       latencyMs,
       timestamp,
     });
 
-    console.log('[Scan] Saved. ID:', scan._id, '| Latency:', latencyMs + 'ms');
+    console.log('[Phase 6] Saved to MongoDB. ID:', scan._id, '| Latency:', latencyMs + 'ms');
 
     return res.json({
       scanId: scan._id,
@@ -520,16 +704,14 @@ No markdown. No backticks. No text before or after.
       reasoning,
       claims,
       searchResults: enrichedResults,
-      preCheck,
+      signals: { factCheckerCount, highCredCount, debunkSignals, supportSignals },
       isMock: false,
       timestamp: timestamp.toISOString(),
       latencyMs,
     });
 
   } catch (err: any) {
-    console.error('[Scan] Cerebras verdict FAILED:');
-    console.error('  Status:', err.response?.status);
-    console.error('  Error:', err.response?.data || err.message);
+    console.error('[Phase 5] Verdict synthesis FAILED:', err.message);
     return res.status(502).json({
       error: 'AI verdict synthesis failed. Please try again.',
       code: 'CEREBRAS_VERDICT_FAILED',
@@ -542,65 +724,187 @@ No markdown. No backticks. No text before or after.
  * @route POST /api/scan/media
  * @desc Scan media (image/video/audio) for deepfake/manipulation
  */
-router.post('/media', scanRateLimit, async (req: Request, res: Response) => {
+router.post('/media', async (req: any, res: Response) => {
+  const startTime = Date.now();
+  const { fileUrl, mediaType } = req.body;
+  const sessionId = req.headers['x-session-id'] as string || 'anonymous';
+
+  if (!fileUrl) {
+    return res.status(400).json({
+      error: 'No file URL provided.',
+      code: 'MISSING_FILE_URL'
+    });
+  }
+
+  if (!['image', 'video', 'audio'].includes(mediaType)) {
+    return res.status(400).json({
+      error: 'Invalid mediaType. Must be image, video, or audio.',
+      code: 'INVALID_MEDIA_TYPE'
+    });
+  }
+
+  // Check Reality Defender key
+  if (!process.env.REALITY_DEFENDER_API_KEY) {
+    return res.status(503).json({
+      error: 'Media deepfake detection is not configured on this server.',
+      code: 'RD_KEY_MISSING'
+    });
+  }
+
+  console.log('[Media Scan] Starting for:', mediaType, fileUrl.slice(0, 80));
+
+  // ---- STEP 1: Submit to Reality Defender ----
+  let rdJobId: string;
   try {
-    const { fileUrl, mediaType, fileName } = req.body;
-    const userId = req.headers['x-session-id'] as string || 'anonymous';
-    const startTime = Date.now();
+    console.log('[Media Scan] Submitting to Reality Defender...');
+    const submitRes = await axios.post(
+      'https://api.realitydefender.com/api/upload',
+      { url: fileUrl },
+      {
+        headers: {
+          'Authorization': `Bearer ${process.env.REALITY_DEFENDER_API_KEY}`,
+          'Content-Type': 'application/json'
+        },
+        timeout: 30000
+      }
+    );
 
-    if (!fileUrl || !mediaType) {
-      return res.status(400).json({ error: 'File URL and media type must be provided' });
+    rdJobId = submitRes.data?.data?.request_id || submitRes.data?.request_id;
+    if (!rdJobId) throw new Error('No request_id in Reality Defender response');
+
+    console.log('[Media Scan] RD Job ID:', rdJobId);
+  } catch (err: any) {
+    console.error('[Media Scan] RD submit failed:', err.response?.data || err.message);
+    return res.status(502).json({
+      error: 'Deepfake detection service failed. Please try again.',
+      code: 'RD_SUBMIT_FAILED',
+      detail: err.response?.data?.message || err.message
+    });
+  }
+
+  // ---- STEP 2: Poll Reality Defender for result ----
+  let rdResult: any = null;
+  const MAX_POLLS = 15;
+  const POLL_INTERVAL = 3000;
+
+  for (let i = 0; i < MAX_POLLS; i++) {
+    await new Promise((r) => setTimeout(r, POLL_INTERVAL));
+
+    try {
+      console.log(`[Media Scan] Polling RD (${i + 1}/${MAX_POLLS})...`);
+      const pollRes = await axios.get(
+        `https://api.realitydefender.com/api/upload/${rdJobId}`,
+        {
+          headers: {
+            'Authorization': `Bearer ${process.env.REALITY_DEFENDER_API_KEY}`
+          },
+          timeout: 15000
+        }
+      );
+
+      const status = pollRes.data?.data?.status || pollRes.data?.status;
+      console.log('[Media Scan] RD Status:', status);
+
+      if (status === 'completed' || status === 'COMPLETED' ||
+          status === 'finished' || status === 'FINISHED') {
+        rdResult = pollRes.data?.data || pollRes.data;
+        break;
+      }
+
+      if (status === 'failed' || status === 'FAILED' || status === 'error') {
+        throw new Error('Reality Defender processing failed');
+      }
+
+    } catch (pollErr: any) {
+      console.error('[Media Scan] Polling error:', pollErr.message);
+      if (i === MAX_POLLS - 1) {
+        return res.status(504).json({
+          error: 'Deepfake detection timed out. Please try again.',
+          code: 'RD_TIMEOUT'
+        });
+      }
     }
+  }
 
-    console.log(`Scanning ${mediaType} for manipulation: ${fileUrl}`);
+  if (!rdResult) {
+    return res.status(504).json({
+      error: 'Deepfake detection did not complete in time.',
+      code: 'RD_TIMEOUT'
+    });
+  }
 
-    // Call Reality Defender
-    const { probability, isMock, regions, timestamps } = await verifyMediaAuthenticity(fileUrl, mediaType);
+  try {
+    // ---- STEP 3: Parse RD result into verdict ----
+    const manipulationProbability =
+      rdResult.probability ??
+      rdResult.manipulation_probability ??
+      rdResult.score ??
+      rdResult.fake_probability ??
+      0;
 
-    // probability: 0-1
-    // confidence = probability * 100
-    // verdict: >70% = "manipulated", <30% = "authentic", else "uncertain"
-    const confidence = Math.round(probability * 100);
-    let verdict: 'authentic' | 'manipulated' | 'uncertain';
+    const confidenceScore = Math.round(manipulationProbability * 100);
 
-    if (confidence > 70) {
+    let verdict: string;
+    let reasoning: string;
+
+    if (manipulationProbability > 0.70) {
       verdict = 'manipulated';
-    } else if (confidence < 30) {
+      reasoning = `Reality Defender detected a ${confidenceScore}% probability of AI manipulation in this ${mediaType}. ` +
+        `Artificial patterns or synthetic signals were identified, consistent with deepfake generation ` +
+        `or AI-based content modification. ` +
+        (rdResult.regions ? `Suspicious regions were detected at specific coordinates in the file.` :
+         `The overall pattern analysis indicates this content has been synthetically generated or altered.`);
+    } else if (manipulationProbability < 0.30) {
       verdict = 'authentic';
-      // Recalculate confidence for authenticity (how certain we are it's real)
-      // Actually, probability usually means "probability of manipulation".
-      // So if prob=0.1, it's 10% chance of manipulation, hence 90% chance of authenticity.
-      // We'll stick to what the prompt says: confidence = probability * 100.
+      reasoning = `Reality Defender found only a ${confidenceScore}% probability of manipulation in this ${mediaType}. ` +
+        `No significant artificial patterns or deepfake signatures were detected. ` +
+        `The content appears to be genuine and unaltered based on pixel-level and pattern analysis.`;
     } else {
       verdict = 'uncertain';
+      reasoning = `Reality Defender returned a ${confidenceScore}% manipulation probability for this ${mediaType}, ` +
+        `which falls in the uncertain range (30-70%). ` +
+        `Some patterns were detected that could indicate manipulation, but the evidence is not conclusive. ` +
+        `Manual review is recommended for a definitive assessment.`;
     }
 
-    const reasoning = verdict === 'manipulated' 
-      ? `Our analysis has detected significant signs of digital manipulation in this ${mediaType}. Elevated levels of artificial patterns were found.`
-      : verdict === 'authentic'
-      ? `This ${mediaType} shows no signs of high-level digital manipulation or synthetic generation. It appears to be authentic.`
-      : `The analysis of this ${mediaType} was inconclusive. Some patterns suggest minor editing, but not enough to definitively classify it as manipulated.`;
+    console.log('[Media Scan] Verdict:', verdict, '| Probability:', confidenceScore + '%');
 
-    const scanData = {
-      userId,
+    // ---- STEP 4: Save to MongoDB ----
+    const latencyMs = Date.now() - startTime;
+    const timestamp = new Date();
+
+    const scan = await Scan.create({
+      userId: sessionId,
       mediaType,
-      sourceUrl: fileUrl,
+      fileUrl,
       verdict,
-      confidence,
+      confidence: manipulationProbability > 0.70
+        ? confidenceScore
+        : manipulationProbability < 0.30
+          ? 100 - confidenceScore
+          : Math.abs(50 - confidenceScore) + 50,
+      flaggedText: [],
       reasoning,
-      isMock,
-      timestamp: new Date(),
-      detectedRegions: regions,
-      detectedTimestamps: timestamps,
-      fileName,
-      latencyMs: Date.now() - startTime
-    };
+      isMock: false,
+      rdJobId,
+      rdRawResult: rdResult,
+      latencyMs,
+      timestamp
+    });
 
-    console.log('Saving media scan result to MongoDB...');
-    const savedScan = await Scan.create(scanData);
+    console.log('[Media Scan] Saved. ID:', scan._id);
 
-    return res.status(200).json(savedScan);
-
+    return res.json({
+      scanId: scan._id,
+      verdict,
+      confidence: scan.confidence,
+      reasoning,
+      manipulationProbability: confidenceScore,
+      regions: rdResult.regions || rdResult.detected_regions || null,
+      isMock: false,
+      timestamp: timestamp.toISOString(),
+      latencyMs
+    });
   } catch (error: any) {
     console.error('Error in /api/scan/media:', error);
     return res.status(500).json({ error: 'Media analysis failed. Please try again.' });

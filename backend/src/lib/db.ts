@@ -13,7 +13,9 @@ if (!MONGODB_URI) {
 export interface IScan extends Document {
   userId: string;
   mediaType: 'text' | 'image' | 'video' | 'audio';
+  inputType?: 'url' | 'text';
   sourceUrl?: string;
+  originalText?: string;
   fileUrl?: string;
   verdict: 'authentic' | 'manipulated' | 'uncertain';
   confidence: number;
@@ -27,6 +29,14 @@ export interface IScan extends Document {
   detectedTimestamps?: any[];
   fileName?: string;
   latencyMs?: number;
+  rdJobId?: string;
+  rdRawResult?: any;
+  signals?: {
+    factCheckerCount?: number;
+    highCredCount?: number;
+    debunkSignals?: number;
+    supportSignals?: number;
+  };
 }
 
 const ScanSchema = new Schema<IScan>({
@@ -40,7 +50,12 @@ const ScanSchema = new Schema<IScan>({
     enum: ['text', 'image', 'video', 'audio'], 
     required: true 
   },
+  inputType: {
+    type: String,
+    enum: ['url', 'text'],
+  },
   sourceUrl: { type: String },
+  originalText: { type: String },
   fileUrl: { type: String },
   verdict: { 
     type: String, 
@@ -75,6 +90,9 @@ const ScanSchema = new Schema<IScan>({
   detectedTimestamps: { type: Schema.Types.Mixed },
   fileName: { type: String },
   latencyMs: { type: Number },
+  rdJobId: { type: String },
+  rdRawResult: { type: Schema.Types.Mixed },
+  signals: { type: Schema.Types.Mixed },
 }, { 
   timestamps: false,
   versionKey: false
