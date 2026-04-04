@@ -4,7 +4,7 @@ import React, { useState } from 'react';
 
 import TextResultCard from '@/components/TextResultCard';
 import MediaUploader from '@/components/MediaUploader';
-import MediaResultCard from '@/components/MediaResultCard';
+import MediaResultCard from '../../components/MediaResultCard';
 import ScanSkeleton from '@/components/ScanSkeleton';
 import { toast } from 'react-hot-toast';
 import { apiFetch } from '@/lib/apiFetch';

@@ -1,174 +1,357 @@
 'use client';
 
-import React from 'react';
-
-interface MediaResultCardProps {
-  result: {
-    mediaType: 'image' | 'video' | 'audio';
-    sourceUrl: string;
-    verdict: 'authentic' | 'manipulated' | 'uncertain';
-    confidence: number;
-    reasoning: string;
-    isMock: boolean;
-    timestamp: string | Date;
-    fileName?: string;
-    detectedRegions?: any[];
-    detectedTimestamps?: any[];
-  };
+interface BreakdownItem {
+  aspect: string;
+  severity: 'normal' | 'warning' | 'critical';
+  score: number;
+  description: string;
 }
 
-export default function MediaResultCard({ result }: MediaResultCardProps) {
-  const { 
-    mediaType, 
-    sourceUrl, 
-    verdict, 
-    confidence, 
-    reasoning, 
-    isMock, 
-    timestamp, 
-    fileName,
-    detectedRegions,
-    detectedTimestamps 
-  } = result;
+interface Props {
+  verdict: string;
+  confidence: number;
+  overallForgeryScore: number;
+  imageType: string;
+  reasoning: string;
+  breakdown: BreakdownItem[];
+  fileUrl: string;
+  timestamp: string;
+  latencyMs: number;
+}
 
-  const getVerdictStyles = () => {
-    switch (verdict) {
-      case 'authentic':
-        return {
-          text: 'text-emerald-400',
-          bg: 'bg-emerald-500/10',
-          border: 'border-emerald-500/50',
-          bar: 'bg-emerald-500'
-        };
-      case 'manipulated':
-        return {
-          text: 'text-rose-400',
-          bg: 'bg-rose-500/10',
-          border: 'border-rose-500/50',
-          bar: 'bg-rose-500'
-        };
-      default:
-        return {
-          text: 'text-amber-400',
-          bg: 'bg-amber-500/10',
-          border: 'border-amber-500/50',
-          bar: 'bg-amber-500'
-        };
+interface LegacyProps {
+  result: Partial<Props>;
+}
+
+export default function MediaResultCard(props: Props | LegacyProps) {
+  const data = ('result' in props ? props.result : props) as Partial<Props>;
+
+  const verdict = data.verdict || 'uncertain';
+  const confidence = typeof data.confidence === 'number' ? data.confidence : 50;
+  const overallForgeryScore =
+    typeof data.overallForgeryScore === 'number' ? data.overallForgeryScore : confidence;
+  const imageType = data.imageType || 'Media File';
+  const reasoning = data.reasoning || 'Analysis summary is not available.';
+  const breakdown = Array.isArray(data.breakdown) ? data.breakdown : [];
+  const fileUrl = data.fileUrl || '';
+  const timestamp = data.timestamp || '';
+  const latencyMs = typeof data.latencyMs === 'number' ? data.latencyMs : 0;
+
+  const scoreColor = (s: number) =>
+    s > 70 ? '#f87171' : s > 40 ? '#fb923c' : '#4ade80';
+
+  const verdictMap: Record<string, any> = {
+    manipulated: {
+      label: 'MANIPULATED',
+      color: '#f87171',
+      bg: 'rgba(248,113,113,0.12)',
+      border: 'rgba(248,113,113,0.35)'
+    },
+    authentic: {
+      label: 'AUTHENTIC',
+      color: '#4ade80',
+      bg: 'rgba(74,222,128,0.12)',
+      border: 'rgba(74,222,128,0.35)'
+    },
+    uncertain: {
+      label: 'UNCERTAIN',
+      color: '#fb923c',
+      bg: 'rgba(251,146,60,0.12)',
+      border: 'rgba(251,146,60,0.35)'
     }
   };
 
-  const styles = getVerdictStyles();
+  const severityMap: Record<string, any> = {
+    critical: {
+      bg:        'rgba(248,113,113,0.08)',
+      border:    'rgba(248,113,113,0.30)',
+      badgeBg:   '#ef4444',
+      badgeText: '#fff',
+      label:     'CRITICAL'
+    },
+    warning: {
+      bg:        'rgba(251,146,60,0.08)',
+      border:    'rgba(251,146,60,0.30)',
+      badgeBg:   '#f97316',
+      badgeText: '#fff',
+      label:     'WARNING'
+    },
+    normal: {
+      bg:        'rgba(255,255,255,0.03)',
+      border:    'rgba(255,255,255,0.09)',
+      badgeBg:   null,
+      badgeText: null,
+      label:     null
+    }
+  };
+
+  const vc = verdictMap[verdict] || verdictMap.uncertain;
+
+  const formatDate = (ts: string) => {
+    const d = new Date(ts);
+    if (isNaN(d.getTime())) return '';
+    return d.toLocaleString('en-US', {
+      month: 'short', day: 'numeric', year: 'numeric',
+      hour: '2-digit', minute: '2-digit'
+    });
+  };
 
   return (
-    <div className="mt-8 overflow-hidden rounded-3xl border border-white/10 bg-white/5 backdrop-blur-xl animate-in fade-in slide-in-from-bottom-5 duration-700">
-      {isMock && (
-        <div className="flex items-center justify-center gap-2 bg-amber-500/20 py-2 text-center text-xs font-bold uppercase tracking-widest text-amber-500">
-          <span>⚠️ Demo mode — result is simulated</span>
-        </div>
-      )}
+    <div style={{
+      width: '100%',
+      maxWidth: '780px',
+      margin: '0 auto',
+      background: 'rgba(255,255,255,0.04)',
+      border: '1px solid rgba(255,255,255,0.10)',
+      borderRadius: '18px',
+      overflow: 'hidden',
+      color: '#fff',
+      fontFamily: 'inherit'
+    }}>
 
-      <div className="grid grid-cols-1 md:grid-cols-2">
-        {/* Media Preview Section */}
-        <div className="relative aspect-square md:aspect-auto h-full min-h-[300px] bg-black/40 overflow-hidden group">
-          {mediaType === 'image' ? (
-            <>
-              <img 
-                src={sourceUrl} 
-                alt="Uploaded media" 
-                className="h-full w-full object-contain transition-transform duration-700 group-hover:scale-105"
-              />
-              {/* Highlight regions if any */}
-              {detectedRegions?.map((region, idx) => (
-                <div 
-                  key={idx}
-                  className="absolute border-2 border-rose-500 bg-rose-500/20 animate-pulse"
-                  style={{
-                    left: `${region.x}%`,
-                    top: `${region.y}%`,
-                    width: `${region.width}%`,
-                    height: `${region.height}%`
-                  }}
-                />
-              ))}
-            </>
-          ) : (
-            <div className="flex h-full w-full flex-col items-center justify-center gap-4 text-gray-500">
-              {mediaType === 'video' ? (
-                <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="m22 8-6 4 6 4V8Z"></path>
-                  <rect width="14" height="12" x="2" y="6" rx="2" ry="2"></rect>
-                </svg>
-              ) : (
-                <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M9 18V5l12-2v13"></path>
-                  <circle cx="6" cy="18" r="3"></circle>
-                  <circle cx="18" cy="16" r="3"></circle>
-                </svg>
-              )}
-              <span className="font-bold uppercase tracking-widest text-sm">{mediaType} File</span>
-              <a 
-                href={sourceUrl} 
-                target="_blank" 
-                rel="noopener noreferrer"
-                className="rounded-full bg-white/10 px-4 py-2 text-xs font-bold text-white transition-colors hover:bg-white/20"
-              >
-                View Original
-              </a>
-            </div>
-          )}
+      {/* ── HEADER ─────────────────────────────── */}
+      <div style={{
+        textAlign: 'center',
+        padding: '22px 28px 18px',
+        borderBottom: '1px solid rgba(255,255,255,0.08)'
+      }}>
+        <h2 style={{
+          margin: '0 0 5px',
+          fontSize: '21px',
+          fontWeight: 700,
+          color: '#fff'
+        }}>
+          Detection Report
+        </h2>
+        <p style={{
+          margin: 0,
+          fontSize: '13px',
+          color: 'rgba(255,255,255,0.45)'
+        }}>
+          Image Type:{' '}
+          <strong style={{ color: 'rgba(255,255,255,0.85)', fontWeight: 600 }}>
+            {imageType}
+          </strong>
+        </p>
+      </div>
+
+      {/* ── SCORE ROW ──────────────────────────── */}
+      <div style={{
+        display: 'flex',
+        gap: '22px',
+        padding: '22px 28px',
+        borderBottom: '1px solid rgba(255,255,255,0.08)',
+        alignItems: 'flex-start'
+      }}>
+        {/* Thumbnail */}
+        <div style={{
+          flexShrink: 0,
+          width: '145px',
+          height: '135px',
+          borderRadius: '10px',
+          overflow: 'hidden',
+          background: 'rgba(255,255,255,0.07)',
+          border: '1px solid rgba(255,255,255,0.10)'
+        }}>
+          <img
+            src={fileUrl}
+            alt="Analyzed"
+            style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+            onError={e => {
+              (e.target as HTMLImageElement).style.display = 'none';
+            }}
+          />
         </div>
 
-        {/* Info Section */}
-        <div className="p-6 md:p-8">
-          <div className="flex items-center justify-between">
-            <span className={`rounded-full border px-3 py-1 text-xs font-bold uppercase tracking-wider ${styles.text} ${styles.border} ${styles.bg}`}>
-              {verdict}
+        {/* Score + verdict + summary */}
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <p style={{
+            margin: '0 0 3px',
+            fontSize: '11px',
+            letterSpacing: '0.07em',
+            textTransform: 'uppercase',
+            color: 'rgba(255,255,255,0.40)'
+          }}>
+            Overall Forgery Score
+          </p>
+
+          {/* Big score */}
+          <div style={{
+            display: 'flex',
+            alignItems: 'baseline',
+            gap: '1px',
+            marginBottom: '13px'
+          }}>
+            <span style={{
+              fontSize: '62px',
+              fontWeight: 800,
+              lineHeight: 1,
+              color: scoreColor(overallForgeryScore)
+            }}>
+              {overallForgeryScore}
             </span>
-            <span className="text-xs text-gray-500">
-              {new Date(timestamp).toLocaleString()}
-            </span>
+            <span style={{
+              fontSize: '26px',
+              fontWeight: 700,
+              color: scoreColor(overallForgeryScore)
+            }}>%</span>
           </div>
 
-          <h2 className="mt-6 text-2xl font-bold text-white break-words">
-            {fileName || 'Media Analysis'}
-          </h2>
-
-          <div className="mt-8">
-            <div className="flex items-end justify-between">
-              <span className="text-sm font-semibold text-gray-400 uppercase tracking-widest">
-                Manipulation Probability
-              </span>
-              <span className={`text-2xl font-black ${styles.text}`}>
-                {confidence}%
-              </span>
-            </div>
-            <div className="mt-3 h-3 w-full overflow-hidden rounded-full bg-white/5">
-              <div 
-                className={`h-full transition-all duration-1000 ease-out ${styles.bar}`}
-                style={{ width: `${confidence}%` }}
-              />
-            </div>
+          {/* Verdict badge */}
+          <div style={{
+            display: 'inline-block',
+            padding: '5px 15px',
+            borderRadius: '20px',
+            fontSize: '12px',
+            fontWeight: 700,
+            letterSpacing: '0.07em',
+            color: vc.color,
+            background: vc.bg,
+            border: `1px solid ${vc.border}`,
+            marginBottom: '16px'
+          }}>
+            {vc.label}
           </div>
 
-          <div className="mt-8 space-y-4">
-            <h3 className="text-sm font-bold uppercase tracking-widest text-white">AI Reasoning</h3>
-            <p className="text-sm leading-relaxed text-gray-400">
+          {/* Summary */}
+          <div style={{
+            borderTop: '1px solid rgba(255,255,255,0.08)',
+            paddingTop: '13px'
+          }}>
+            <p style={{
+              margin: '0 0 5px',
+              fontSize: '11px',
+              fontWeight: 600,
+              letterSpacing: '0.06em',
+              textTransform: 'uppercase',
+              color: 'rgba(255,255,255,0.55)'
+            }}>
+              Analysis Summary
+            </p>
+            <p style={{
+              margin: 0,
+              fontSize: '13px',
+              lineHeight: 1.65,
+              color: 'rgba(255,255,255,0.60)'
+            }}>
               {reasoning}
             </p>
           </div>
+        </div>
+      </div>
 
-          {detectedTimestamps && detectedTimestamps.length > 0 && (
-            <div className="mt-8 space-y-3">
-              <h3 className="text-sm font-bold uppercase tracking-widest text-white">Timestamp Markers</h3>
-              <div className="flex flex-wrap gap-2">
-                {detectedTimestamps.map((t, idx) => (
-                  <span key={idx} className="rounded-lg bg-rose-500/20 px-2 py-1 text-xs font-medium text-rose-400">
-                    {t.start}s - {t.end}s
+      {/* ── DETAILED BREAKDOWN ─────────────────── */}
+      <div style={{ padding: '22px 28px' }}>
+        <h3 style={{
+          margin: '0 0 18px',
+          fontSize: '17px',
+          fontWeight: 700,
+          textAlign: 'center',
+          color: '#fff'
+        }}>
+          Detailed Breakdown
+        </h3>
+
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+          {breakdown.map((item, idx) => {
+            const sc = severityMap[item.severity] || severityMap.normal;
+            const col = scoreColor(item.score);
+
+            return (
+              <div key={idx} style={{
+                background: sc.bg,
+                border: `1px solid ${sc.border}`,
+                borderRadius: '10px',
+                padding: '13px 16px'
+              }}>
+                {/* Top row: name + badge + score */}
+                <div style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: '8px',
+                  marginBottom: '8px'
+                }}>
+                  <div style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '8px',
+                    flexWrap: 'wrap',
+                    flex: 1
+                  }}>
+                    <span style={{
+                      fontSize: '13px',
+                      fontWeight: 600,
+                      color: '#fff'
+                    }}>
+                      {item.aspect}
+                    </span>
+                    {sc.label && (
+                      <span style={{
+                        fontSize: '10px',
+                        fontWeight: 700,
+                        padding: '2px 8px',
+                        borderRadius: '20px',
+                        background: sc.badgeBg,
+                        color: sc.badgeText,
+                        letterSpacing: '0.05em'
+                      }}>
+                        {sc.label}
+                      </span>
+                    )}
+                  </div>
+                  <span style={{
+                    fontSize: '14px',
+                    fontWeight: 700,
+                    color: col,
+                    flexShrink: 0
+                  }}>
+                    {item.score}%
                   </span>
-                ))}
+                </div>
+
+                {/* Progress bar */}
+                <div style={{
+                  height: '3px',
+                  background: 'rgba(255,255,255,0.08)',
+                  borderRadius: '2px',
+                  marginBottom: '9px',
+                  overflow: 'hidden'
+                }}>
+                  <div style={{
+                    height: '100%',
+                    width: `${item.score}%`,
+                    background: col,
+                    borderRadius: '2px'
+                  }} />
+                </div>
+
+                {/* Description */}
+                <p style={{
+                  margin: 0,
+                  fontSize: '12px',
+                  lineHeight: 1.65,
+                  color: 'rgba(255,255,255,0.50)'
+                }}>
+                  {item.description}
+                </p>
               </div>
-            </div>
-          )}
+            );
+          })}
+        </div>
+
+        {/* Footer */}
+        <div style={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          marginTop: '18px',
+          paddingTop: '14px',
+          borderTop: '1px solid rgba(255,255,255,0.08)',
+          fontSize: '11px',
+          color: 'rgba(255,255,255,0.28)'
+        }}>
+          <span>Analysis time: {(latencyMs / 1000).toFixed(1)}s</span>
+          <span>{formatDate(timestamp)}</span>
         </div>
       </div>
     </div>

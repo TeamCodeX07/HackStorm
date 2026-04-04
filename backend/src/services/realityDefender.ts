@@ -1,73 +1,101 @@
 import axios from 'axios';
 
-interface RealityDefenderResponse {
+export interface RDResult {
   probability: number;
-  detected_regions?: any[]; // For image highlights
-  timestamps?: any[]; // For video/audio
+  jobId: string;
+  status: string;
+  rawData: any;
 }
 
-export async function verifyMediaAuthenticity(
-  fileUrl: string,
-  mediaType: 'image' | 'video' | 'audio'
-): Promise<{ probability: number; isMock: boolean; regions?: any[]; timestamps?: any[] }> {
-  const apiKey = process.env.REALITY_DEFENDER_API_KEY;
-
-  if (!apiKey || apiKey === 'your_reality_defender_api_key_here') {
-    return useMockResponse();
-  }
-
-  try {
-    const response = await axios.post(
-      'https://api.realitydefender.com/api/upload',
-      {
-        url: fileUrl,
-        media_type: mediaType,
+export async function submitToRD(fileUrl: string): Promise<string> {
+  console.log('[RD] Submitting file URL...');
+  
+  const res = await axios.post(
+    'https://api.realitydefender.com/api/upload',
+    { url: fileUrl },
+    {
+      headers: {
+        'Authorization': `Bearer ${process.env.REALITY_DEFENDER_API_KEY}`,
+        'Content-Type': 'application/json'
       },
-      {
-        headers: {
-          'x-api-key': apiKey,
-          'Content-Type': 'application/json',
-        },
-        timeout: 20000,
-      }
-    );
-
-    // Some APIs are async, we might need to poll,
-    // but the prompt mentions synchronous response or polling.
-    // For this implementation, we assume sync or fallback to mock on error.
-    
-    return {
-      probability: response.data.probability ?? 0.5,
-      isMock: false,
-      regions: response.data.detected_regions,
-      timestamps: response.data.timestamps,
-    };
-  } catch (error: any) {
-    const status = error.response?.status;
-    const detail = error.response?.data || error.message;
-    console.error('Reality Defender API Error:', detail);
-
-    // Keep media scans available even when provider is unreachable/misconfigured.
-    // This prevents hard 500 failures in the UI and returns explicit mock-tagged results.
-    if (!status || status === 429 || status >= 400) {
-      return useMockResponse();
+      timeout: 30000
     }
+  );
 
-    return useMockResponse();
+  const jobId =
+    res.data?.data?.request_id ||
+    res.data?.request_id ||
+    res.data?.id;
+
+  if (!jobId) {
+    console.error('[RD] Response:', JSON.stringify(res.data));
+    throw new Error('No job ID in Reality Defender response');
   }
+
+  console.log('[RD] Submitted. Job ID:', jobId);
+  return jobId;
 }
 
-function useMockResponse() {
-  // Return random confidence between 60-95
-  const mockConfidence = Math.random() * (0.95 - 0.6) + 0.6;
-  
-  // Decide verdict based on random value
-  // We'll return probabilities that will lead to various verdicts
-  const outcomes = [0.15, 0.85, 0.5]; // Authentic, Manipulated, Uncertain
-  const chosenProb = outcomes[Math.floor(Math.random() * outcomes.length)];
-  
-  return {
-    probability: chosenProb,
-    isMock: true,
-  };
+export async function pollRD(
+  jobId: string,
+  maxPolls = 20,
+  intervalMs = 3000
+): Promise<RDResult> {
+  for (let i = 0; i < maxPolls; i++) {
+    await new Promise(r => setTimeout(r, intervalMs));
+    console.log(`[RD] Poll ${i + 1}/${maxPolls} for job: ${jobId}`);
+
+    try {
+      const res = await axios.get(
+        `https://api.realitydefender.com/api/upload/${jobId}`,
+        {
+          headers: {
+            'Authorization': `Bearer ${process.env.REALITY_DEFENDER_API_KEY}`
+          },
+          timeout: 15000
+        }
+      );
+
+      const data = res.data?.data || res.data;
+      const status = (data?.status || '').toLowerCase();
+      console.log('[RD] Status:', status, '| Data keys:', Object.keys(data || {}));
+
+      if (['completed', 'finished', 'done', 'success'].includes(status)) {
+        // Try every possible probability field RD might return
+        const probability =
+          data.probability ??
+          data.manipulation_probability ??
+          data.fake_probability ??
+          data.deepfake_probability ??
+          data.score ??
+          data.result?.probability ??
+          data.analysis?.score ?? 0;
+
+        const finalProb = typeof probability === 'number'
+          ? Math.min(1, Math.max(0, probability))
+          : parseFloat(probability) || 0;
+
+        console.log('[RD] Complete. Probability:', finalProb,
+          '(', Math.round(finalProb * 100) + '%)');
+
+        return {
+          probability: finalProb,
+          jobId,
+          status,
+          rawData: data
+        };
+      }
+
+      if (['failed', 'error', 'rejected', 'cancelled'].includes(status)) {
+        throw new Error(`Reality Defender job ${status}: ${jobId}`);
+      }
+
+    } catch (pollErr: any) {
+      if (pollErr.message.includes('Reality Defender job')) throw pollErr;
+      console.error(`[RD] Poll ${i + 1} error:`, pollErr.message);
+      if (i === maxPolls - 1) throw pollErr;
+    }
+  }
+
+  throw new Error('Reality Defender polling timed out after ' + maxPolls + ' attempts');
 }

@@ -32,6 +32,15 @@ interface MulterRequest extends Request {
   file?: Express.Multer.File;
 }
 
+// GET /api/upload
+router.get('/', (_req: Request, res: Response) => {
+  res.json({
+    status: 'ok',
+    message: 'Upload endpoint is ready. Use POST with multipart/form-data and field name "file".',
+    cloudinaryConfigured: hasCloudinaryConfig,
+  });
+});
+
 // POST /api/upload
 router.post('/', upload.single('file'), async (req: MulterRequest, res: Response) => {
   try {
